@@ -12,7 +12,7 @@
  * Documentation on the Calendar API here https://developers.google.com/apps-script/reference/calendar/calendar-app
  */
 const CONFIG = {
-  calendarId: "cjstreeter@gmail.com", // (personal) calendar from which to block time
+  personalCalendarId: "cjstreeter@gmail.com",
   daysToBlockInAdvance: 30, // how many days to look ahead for
   blockedEventTitle: "Busy", // the title to use in the created events in the (work) calendar
   skipWeekends: true, // if weekend events should be skipped or not
@@ -52,7 +52,9 @@ function blockFromPersonalCalendar() {
       .map((event) => getRoughDay(event))
   );
 
-  const secondaryCalendar = CalendarApp.getCalendarById(CONFIG.calendarId);
+  const secondaryCalendar = CalendarApp.getCalendarById(
+    CONFIG.personalCalendarId
+  );
   secondaryCalendar
     .getEvents(now, endDate)
     .filter(
@@ -107,7 +109,7 @@ function blockFromPersonalCalendar() {
         newEvent.setTag(COPIED_EVENT_TAG, event.getId());
         newEvent.removeAllReminders(); // Avoid double notifications
       } catch (e) {
-        Logger.log(`Unable to create an event with an error: ${e}`);
+        console.error(`Unable to create an event with an error`, e);
       }
     });
 
@@ -156,7 +158,7 @@ const withLogging = (reason, fun) => {
   return (event) => {
     const result = fun.call(this, event);
     if (!result) {
-      console.info(
+      Logger.log(
         `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because it's ${reason}`
       );
     }

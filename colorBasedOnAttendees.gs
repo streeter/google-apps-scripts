@@ -3,27 +3,28 @@
 // ******************************************************************************************************
 
 // Set main variables that are used to choose the calendar and do the right mapping for classifications
-const myUsername = "streeter";
-const domainName = "stripe.com";
-const calendarName = myUsername + domainName;
+const calendarName = Session.getActiveUser().getEmail();
 const myalias = calendarName; // Or set to another alias if you have one
 const myabp = "i-do-not-have-an-abp";
+
+const domainName = calendarName.split("@")[-1];
+const myUsername = calendarName.split("@")[0];
 const firstName = myUsername; // Used to detect 1:1s
-const myorg = ["mips-team@", "tech@"];
-const vips = [
-  // TODO
-];
+const myorg = GetColorEventOrgNames();
+const vips = GetColorEventVips();
 
 // Choose your color coding here
-const color1on1 = CalendarApp.EventColor.PALE_GREEN;
-const colorExternal = CalendarApp.EventColor.MAUVE;
-const colorFocus = CalendarApp.EventColor.PALE_BLUE;
-const colorRecruiting = CalendarApp.EventColor.GREEN;
-const colorVIP = CalendarApp.EventColor.RED;
-const colorMyOrg = CalendarApp.EventColor.YELLOW;
-const colorInternal = CalendarApp.EventColor.CYAN;
+const ColorEventColors = {
+  oneOnOne: CalendarApp.EventColor.PALE_GREEN,
+  external: CalendarApp.EventColor.MAUVE,
+  focus: CalendarApp.EventColor.PALE_BLUE,
+  recruiting: CalendarApp.EventColor.GREEN,
+  vip: CalendarApp.EventColor.RED,
+  org: CalendarApp.EventColor.YELLOW,
+  internal: CalendarApp.EventColor.CYAN,
+};
 
-const Status = {
+const ColorEventStatus = {
   external: 1,
   vip: 1 << 1,
   myorg: 1 << 2,
@@ -31,7 +32,8 @@ const Status = {
 
 function ColorEvents() {
   const today = new Date();
-  const nextweek = new Date().setDate(today.getDate() + 7);
+  const nextweek = new Date();
+  nextweek.setDate(today.getDate() + 7);
 
   // ******************************************************************************************************
   // *                                         Start of the Script                                        *
@@ -41,6 +43,8 @@ function ColorEvents() {
     let calendar = calendars[i];
     let events = calendar.getEvents(today, nextweek);
 
+    Logger.log(`Processing calendar ${calendar.getName()}`);
+
     // Get all events in the next week, and loop through each event
     for (let j = 0; j < events.length; j++) {
       // Select an event
@@ -49,18 +53,20 @@ function ColorEvents() {
       let title = event.getTitle().toLowerCase();
       let guests = event.getGuestList();
 
-      // Logger.log('Meeting : "%s"', title)
-      // Logger.log('Guests : "%s"', g.length)
+      Logger.log(`Looking at event ${title} with ${guests.length} guests`);
 
       // Catch any blocked time in the calendar or events with no invitees
       if (
         title.includes("dns") ||
         title.includes("focus time") ||
         title.includes("blocked") ||
-        g.length === 0
+        guests.length === 0
       ) {
-        // Logger.log("focus")
-        event.setColor(colorFocus);
+        try {
+          event.setColor(ColorEventColors.focus);
+        } catch (err) {
+          console.error("Unable to set the color with an error", err);
+        }
         continue;
       }
 
@@ -70,7 +76,11 @@ function ColorEvents() {
         title.includes("trope") ||
         title.includes("recruiting")
       ) {
-        event.setColor(colorRecruiting);
+        try {
+          event.setColor(ColorEventColors.recruiting);
+        } catch (err) {
+          console.error("Unable to set the color with an error", err);
+        }
         continue;
       }
 
@@ -90,8 +100,11 @@ function ColorEvents() {
             title.includes(firstName) ||
             title.includes("catch-up")
           ) {
-            // Logger.log("1:1")
-            event.setColor(color1on1);
+            try {
+              event.setColor(ColorEventColors.oneOnOne);
+            } catch (err) {
+              console.error("Unable to set the color with an error", err);
+            }
             continue;
           }
         }
@@ -106,31 +119,25 @@ function ColorEvents() {
         if (
           checkNonOrg(domainName, guestEmail, event.getCreators().toString())
         ) {
-          // Logger.log("external")
-          // event.setColor(colorExternal);
-          status |= Status.external;
+          status |= ColorEventStatus.external;
           continue;
         }
 
         // Check for any VIP organiser or attendees
         if (checkVIPs(vips, guestEmail, event.getCreators().toString())) {
-          // Logger.log("vip")
-          // event.setColor(colorVIP)
-          status |= Status.vip;
+          status |= ColorEventStatus.vip;
           continue;
         }
 
         if (checkOrgMeetings(myorg, guestEmail)) {
-          // Logger.log("myorg")
-          // event.setColor(colorMyOrg);
-          status |= Status.myorg;
+          status |= ColorEventStatus.myorg;
           continue;
         }
       }
       try {
         event.setColor(setPriorityColor(status));
       } catch (err) {
-        Logger.log("Unable to set the color with an error " + err);
+        console.error("Unable to set the color with an error", err);
       }
     }
   }
@@ -140,19 +147,19 @@ function ColorEvents() {
 // External Meeting, Org Meeting, VIP Meeting, internal meeting
 // Change the order based on your own preference
 function setPriorityColor(status) {
-  if (status & Status.external) {
-    return colorExternal;
+  if (status & ColorEventStatus.external) {
+    return ColorEventColors.external;
   }
 
-  if (status & Status.myorg) {
-    return colorMyOrg;
+  if (status & ColorEventStatus.myorg) {
+    return ColorEventColors.org;
   }
 
-  if (status & Status.vip) {
-    return colorVIP;
+  if (status & ColorEventStatus.vip) {
+    return ColorEventColors.vip;
   }
 
-  return colorInternal;
+  return ColorEventColors.internal;
 }
 
 // This checks to see if a meeting has any of my Tech Services google groups on the invite list but not eileen (which implies it is a TS meeting, not a GTM meeting)
