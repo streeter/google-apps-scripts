@@ -62,11 +62,7 @@ function ColorEvents() {
         title.includes("blocked") ||
         guests.length === 0
       ) {
-        try {
-          event.setColor(ColorEventColors.focus);
-        } catch (err) {
-          console.error("Unable to set the color with an error", err);
-        }
+        updateEventColor(event, ColorEventColors.focus);
         continue;
       }
 
@@ -74,13 +70,10 @@ function ColorEvents() {
       if (
         title.includes("interview") ||
         title.includes("trope") ||
+        title.includes("[VC]") ||
         title.includes("recruiting")
       ) {
-        try {
-          event.setColor(ColorEventColors.recruiting);
-        } catch (err) {
-          console.error("Unable to set the color with an error", err);
-        }
+        updateEventColor(event, ColorEventColors.recruiting);
         continue;
       }
 
@@ -100,11 +93,7 @@ function ColorEvents() {
             title.includes(firstName) ||
             title.includes("catch-up")
           ) {
-            try {
-              event.setColor(ColorEventColors.oneOnOne);
-            } catch (err) {
-              console.error("Unable to set the color with an error", err);
-            }
+            updateEventColor(event, ColorEventColors.oneOnOne);
             continue;
           }
         }
@@ -134,11 +123,8 @@ function ColorEvents() {
           continue;
         }
       }
-      try {
-        event.setColor(setPriorityColor(status));
-      } catch (err) {
-        console.error("Unable to set the color with an error", err);
-      }
+
+      updateEventColor(event, setPriorityColor(status));
     }
   }
 }
@@ -199,4 +185,16 @@ function checkNonOrg(domainName, guestName, organiserName) {
     return true;
   }
   return false;
+}
+
+function updateEventColor(event, color) {
+  if (event.getColor() === color) {
+    return;
+  }
+
+  try {
+    event.setColor(color);
+  } catch (err) {
+    console.error("Unable to set the color with an error", err);
+  }
 }
