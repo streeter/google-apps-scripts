@@ -12,156 +12,226 @@
  * Documentation on the Calendar API here https://developers.google.com/apps-script/reference/calendar/calendar-app
  */
 const CONFIG = {
-  personalCalendarId: "cjstreeter@gmail.com",
+  calendarIds: [
+    "cjstreeter@gmail.com",
+    "anothercalendarid@group.calendar.google.com",
+  ], // (personal) calendars from which to block time
   daysToBlockInAdvance: 30, // how many days to look ahead for
   blockedEventTitle: "Busy", // the title to use in the created events in the (work) calendar
   skipWeekends: true, // if weekend events should be skipped or not
-  skipAllDayEvents: true, // don't block all-day events from the personal calendar
-  workingHoursStartAt: 800, // any events ending before this time will be skipped. Use 0 if you don't care about working hours
-  workingHoursEndAt: 1900, // any events starting after this time will be skipped. Use 2300
-  assumeAllDayEventsInWorkCalendarIsOOO: false, // if the work calendar has an all-day event, assume it's an OOO day, and don't block times
+  skipFreeAvailabilityEvents: true, // don't block events that set visibility as "Free" in the personal calendar
+  workingHoursStartAt: 900, // any events ending before this time will be skipped. Use 0 if you don't care about working hours
+  workingHoursEndAt: 1800, // any events starting after this time will be skipped. Use 2300
+  assumeAllDayEventsInWorkCalendarIsOOO: false, // if the work calendar has an all-day event, assume it's an Out Of Office day, and don't block times
+  color: CalendarApp.EventColor.YELLOW, // set the color of any newly created events (see https://developers.google.com/apps-script/reference/calendar/event-color)
 };
 
-const COPIED_EVENT_TAG = "blockFromPersonal.originalEventId";
+const blockFromPersonalCalendars = () => {
+  /**
+   * Wrapper for the filtering functions that logs why something was skipped
+   */
+  const withLogging = (reason, fun) => {
+    return (event) => {
+      const result = fun.call(this, event);
+      if (!result) {
+        console.info(
+          `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because it's ${reason}`
+        );
+      }
+      return result;
+    };
+  };
 
-function blockFromPersonalCalendar() {
+  /**
+   * Utility class to  make sure that, when comparing events in a personal calendar with the work's calenedar
+   * configuration, things like days and working hours are respected.
+   *
+   * The trick is that JS stores dates as UTC. Transforming dates to the work calendar's tz as a string, and then back
+   * to a Date object, ensures that the absolute numbers for day/hour/minute maintained, which is what we use in the configuration.
+   */
+  const CalendarAwareTimeConverter = (calendar) => {
+    const timeZone = calendar.getTimeZone();
+    const offsetedDate = (date) =>
+      new Date(date.toLocaleString("en-US", { timeZone: timeZone }));
+
+    return {
+      isInAWeekend: (event) => {
+        const day = offsetedDate(event.getStartTime()).getDay();
+        return day != 0 && day != 6;
+      },
+      isOutOfWorkHours: (event) => {
+        const startingDate = offsetedDate(
+          new Date(event.getStartTime().getTime())
+        );
+        const startingTime =
+          startingDate.getHours() * 100 + startingDate.getMinutes();
+        const endingDate = offsetedDate(new Date(event.getEndTime().getTime()));
+        const endingTime =
+          endingDate.getHours() * 100 + endingDate.getMinutes();
+        return (
+          startingTime < CONFIG.workingHoursEndAt &&
+          endingTime > CONFIG.workingHoursStartAt
+        );
+      },
+      day: (event) => {
+        const startTime = offsetedDate(event.getStartTime());
+        return `${startTime.getFullYear()}${startTime.getMonth()}${startTime.getDate()}`;
+      },
+    };
+  };
+
+  /**
+   * Helper to merge results from using CalendarApp and the advanced API
+   * This is inefficient, but gets the best of both worlds: nice JS objects from
+   * CalendarApp, and the `transparency` property from the API. If CalendarApp starts
+   * exposing that in the future, there won't be a need to continue doing this.
+   */
+  const getRichEvents = (calendarId, start, end) => {
+    const calendar = CalendarApp.getCalendarById(calendarId);
+    if (!calendar) {
+      return [];
+    }
+    const richEvents = calendar.getEvents(start, end);
+    const freeAvailabilityEvents = new Set(
+      calendar
+        .getEvents(start, end)
+        .filter((event) => event.transparency === "transparent")
+        .map((event) => event.iCalUID)
+    );
+    richEvents.forEach((event) => {
+      event.showFreeAvailability = freeAvailabilityEvents.has(event.getId());
+    });
+    return richEvents;
+  };
+
+  const eventTagValue = (event) =>
+    `${event.getId()}-${event.getStartTime().toISOString()}`;
+
+  CONFIG.calendarIds.forEach((calendarId) => {
+    console.log(`📆 Processing secondary calendar ${calendarId}`);
+
+    const copiedEventTag = calendarEventTag(calendarId);
+
+    const now = new Date();
+    const endDate = new Date(
+      Date.now() + 1000 * 60 * 60 * 24 * CONFIG.daysToBlockInAdvance
+    );
+
+    const primaryCalendar = CalendarApp.getDefaultCalendar();
+    const timeZoneAware = CalendarAwareTimeConverter(primaryCalendar);
+
+    const knownEvents = Object.assign(
+      {},
+      ...primaryCalendar
+        .getEvents(now, endDate)
+        .filter((event) => event.getTag(copiedEventTag))
+        .map((event) => ({ [event.getTag(copiedEventTag)]: event }))
+    );
+
+    const knownOutOfOfficeDays = new Set(
+      primaryCalendar
+        .getEvents(now, endDate)
+        .filter((event) => event.isAllDayEvent())
+        .map((event) => timeZoneAware.day(event))
+    );
+
+    const eventsInSecondaryCalendar = getRichEvents(calendarId, now, endDate);
+
+    eventsInSecondaryCalendar
+      .filter(
+        withLogging(
+          "already known",
+          (event) => !knownEvents.hasOwnProperty(eventTagValue(event))
+        )
+      )
+      .filter(
+        withLogging("outside of work hours", (event) =>
+          timeZoneAware.isOutOfWorkHours(event)
+        )
+      )
+      .filter(
+        withLogging(
+          "during a weekend",
+          (event) => !CONFIG.skipWeekends || timeZoneAware.isInAWeekend(event)
+        )
+      )
+      .filter(
+        withLogging(
+          "during an OOO day",
+          (event) =>
+            !CONFIG.assumeAllDayEventsInWorkCalendarIsOOO ||
+            !knownOutOfOfficeDays.has(timeZoneAware.day(event))
+        )
+      )
+      .filter(
+        withLogging(
+          'marked as "Free" availabilty or is full day',
+          (event) =>
+            !CONFIG.skipFreeAvailabilityEvents || !event.showFreeAvailability
+        )
+      )
+      .forEach((event) => {
+        console.log(
+          `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+        );
+        primaryCalendar
+          .createEvent(
+            CONFIG.blockedEventTitle,
+            event.getStartTime(),
+            event.getEndTime()
+          )
+          .setTag(copiedEventTag, eventTagValue(event))
+          .setColor(CONFIG.color)
+          .removeAllReminders(); // Avoid double notifications
+      });
+
+    const tagsOnSecondaryCalendar = new Set(
+      eventsInSecondaryCalendar.map(eventTagValue)
+    );
+    Object.values(knownEvents)
+      .filter(
+        (event) => !tagsOnSecondaryCalendar.has(event.getTag(copiedEventTag))
+      )
+      .forEach((event) => {
+        console.log(
+          `🗑️ Need to delete event on ${event.getStartTime()}, as it was removed from personal calendar`
+        );
+        event.deleteEvent();
+      });
+  });
+};
+
+const calendarEventTag = (calendarId) => {
+  const calendarHash = Utilities.base64Encode(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, calendarId)
+  );
+  // This is undocumented, but keys fail if they are longer than 44 chars :)
+  // The idea behind the SHA is to avoid collisions of the substring when you have similarly-named calendars
+  return `blockFromPersonal.${calendarHash.substring(0, 15)}.originalId`;
+};
+
+/**
+ * Utility function to remove all synced events. This is specially useful if you change configurations,
+ * or are doing some testing
+ */
+const cleanUpAllCalendars = () => {
   const now = new Date();
   const endDate = new Date(
     Date.now() + 1000 * 60 * 60 * 24 * CONFIG.daysToBlockInAdvance
   );
-
-  const primaryCalendar = CalendarApp.getDefaultCalendar();
-
-  const knownEvents = Object.assign(
-    {},
-    ...primaryCalendar
-      .getEvents(now, endDate)
-      // Filter out events that do not have a tag
-      .filter(
-        withLogging("not a copied event", (event) =>
-          event.getTag(COPIED_EVENT_TAG)
-        )
-      )
-      .map((event) => ({ [event.getTag(COPIED_EVENT_TAG)]: event }))
+  const tagsOfEventsToDelete = new Set(
+    CONFIG.calendarIds.map(calendarEventTag)
   );
 
-  const knownOutOfOfficeDays = new Set(
-    primaryCalendar
-      .getEvents(now, endDate)
-      .filter((event) => event.isAllDayEvent())
-      .map((event) => getRoughDay(event))
-  );
-
-  const secondaryCalendar = CalendarApp.getCalendarById(
-    CONFIG.personalCalendarId
-  );
-  secondaryCalendar
+  CalendarApp.getDefaultCalendar()
     .getEvents(now, endDate)
-    .filter(
-      withLogging(
-        "already known",
-        (event) => !knownEvents.hasOwnProperty(event.getId())
-      )
-    )
-    // Filter out some event statuses
-    .filter(
-      withLogging("not rsvp'd to", (event) =>
-        [
-          CalendarApp.GuestStatus.MAYBE,
-          CalendarApp.GuestStatus.OWNER,
-          CalendarApp.GuestStatus.YES,
-        ].includes(event.getMyStatus())
-      )
-    )
-    .filter(
-      withLogging("outside of work hours", (event) => isOutOfWorkHours(event))
-    )
-    .filter(
-      withLogging(
-        "during a weekend",
-        (event) => !CONFIG.skipWeekends || isInAWeekend(event)
-      )
-    )
-    .filter(
-      withLogging(
-        "during an OOO day",
-        (event) =>
-          !CONFIG.assumeAllDayEventsInWorkCalendarIsOOO ||
-          !knownOutOfOfficeDays.has(getRoughDay(event))
-      )
-    )
-    .filter(
-      withLogging(
-        "an all day event",
-        (event) => !CONFIG.skipAllDayEvents || !event.isAllDayEvent()
-      )
+    .filter((event) =>
+      event.getAllTagKeys().some((tag) => tagsOfEventsToDelete.has(tag))
     )
     .forEach((event) => {
-      Logger.log(
-        `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
-      );
-      try {
-        const newEvent = primaryCalendar.createEvent(
-          CONFIG.blockedEventTitle,
-          event.getStartTime(),
-          event.getEndTime()
-        );
-        newEvent.setTag(COPIED_EVENT_TAG, event.getId());
-        newEvent.removeAllReminders(); // Avoid double notifications
-      } catch (e) {
-        console.error(`Unable to create an event with an error`, e);
-      }
-    });
-
-  const idsOnSecondaryCalendar = new Set(
-    secondaryCalendar.getEvents(now, endDate).map((event) => event.getId())
-  );
-  Object.values(knownEvents)
-    .filter(
-      (event) => !idsOnSecondaryCalendar.has(event.getTag(COPIED_EVENT_TAG))
-    )
-    .forEach((event) => {
-      Logger.log(
-        `Need to delete event on ${event.getStartTime()}, as it was removed from personal calendar`
+      console.log(
+        `🗑️ Need to delete event on ${event.getStartTime()} as part of cleanup`
       );
       event.deleteEvent();
     });
-}
-
-// Get the day in which an event is happening, without paying attention to timezones
-const getRoughDay = (event) =>
-  `${event.getStartTime().getFullYear()}${event
-    .getStartTime()
-    .getMonth()}${event.getStartTime().getDate()}`;
-
-const isInAWeekend = (event) => {
-  const day = event.getStartTime().getDay();
-  return day != 0 && day != 6;
-};
-
-const isOutOfWorkHours = (event) => {
-  const startingDate = new Date(event.getStartTime().getTime());
-  const startingTime =
-    startingDate.getHours() * 100 + startingDate.getMinutes();
-  const endingDate = new Date(event.getEndTime().getTime());
-  const endingTime = endingDate.getHours() * 100 + endingDate.getMinutes();
-  return (
-    startingTime < CONFIG.workingHoursEndAt &&
-    endingTime > CONFIG.workingHoursStartAt
-  );
-};
-
-/**
- * Wrapper for the filtering functions that logs why something was skipped
- */
-const withLogging = (reason, fun) => {
-  return (event) => {
-    const result = fun.call(this, event);
-    if (!result) {
-      Logger.log(
-        `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because it's ${reason}`
-      );
-    }
-    return result;
-  };
 };
