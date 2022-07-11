@@ -10,6 +10,8 @@ const myabp = "i-do-not-have-an-abp";
 const domainName = calendarName.split("@")[-1];
 const myUsername = calendarName.split("@")[0];
 const firstName = myUsername; // Used to detect 1:1s
+
+// These are defined in a colorAttendeeConfig.js
 const myorg = GetColorEventOrgNames();
 const vips = GetColorEventVips();
 
@@ -21,7 +23,8 @@ const ColorEventColors = {
   recruiting: CalendarApp.EventColor.GREEN,
   vip: CalendarApp.EventColor.RED,
   org: CalendarApp.EventColor.YELLOW,
-  internal: CalendarApp.EventColor.CYAN,
+  internal: CalendarApp.EventColor.GRAY,
+  other: CalendarApp.EventColor.CYAN,
 };
 
 const ColorEventStatus = {

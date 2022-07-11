@@ -12,10 +12,7 @@
  * Documentation on the Calendar API here https://developers.google.com/apps-script/reference/calendar/calendar-app
  */
 const CONFIG = {
-  calendarIds: [
-    "cjstreeter@gmail.com",
-    "anothercalendarid@group.calendar.google.com",
-  ], // (personal) calendars from which to block time
+  calendarIds: GetPersonalCalendars(), // (personal) calendars from which to block time
   daysToBlockInAdvance: 30, // how many days to look ahead for
   blockedEventTitle: "Busy", // the title to use in the created events in the (work) calendar
   skipWeekends: true, // if weekend events should be skipped or not
