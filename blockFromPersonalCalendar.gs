@@ -48,9 +48,13 @@ const blockFromPersonalCalendars = () => {
    */
   const CalendarAwareTimeConverter = (calendar) => {
     const timeZone = calendar.getTimeZone();
-    const offsetedDate = (date) =>
-      new Date(date.toLocaleString("en-US", { timeZone: timeZone }));
 
+    const offsetedDate = (date) => moment(date).tz(timeZone).toDate();
+
+    /*
+     * Return functions that compare the given event (likely from a different calendar),
+     * against the timezone of the passed in calendar.
+     */
     return {
       isInAWeekend: (event) => {
         const day = offsetedDate(event.getStartTime()).getDay();
