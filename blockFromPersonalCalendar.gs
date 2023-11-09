@@ -27,9 +27,9 @@ const blockFromPersonalCalendars = () => {
   /**
    * Wrapper for the filtering functions that logs why something was skipped
    */
-  const withLogging = (reason, fun) => {
+  const withLogging = (reason, func) => {
     return (event) => {
-      const result = fun.call(this, event);
+      const result = func.call(this, event);
       if (!result) {
         console.info(
           `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because it's ${reason}`
@@ -49,7 +49,7 @@ const blockFromPersonalCalendars = () => {
   const CalendarAwareTimeConverter = (calendar) => {
     const timeZone = calendar.getTimeZone();
 
-    const offsetedDate = (date) => moment(date).tz(timeZone).toDate();
+    const tzOffsetDate = (date) => moment(date).tz(timeZone).toDate();
 
     /*
      * Return functions that compare the given event (likely from a different calendar),
@@ -57,25 +57,29 @@ const blockFromPersonalCalendars = () => {
      */
     return {
       isInAWeekend: (event) => {
-        const day = offsetedDate(event.getStartTime()).getDay();
+        const day = tzOffsetDate(event.getStartTime()).getDay();
         return day != 0 && day != 6;
       },
       isOutOfWorkHours: (event) => {
-        const startingDate = offsetedDate(
+        const startingDate = tzOffsetDate(
           new Date(event.getStartTime().getTime())
         );
         const startingTime =
           startingDate.getHours() * 100 + startingDate.getMinutes();
-        const endingDate = offsetedDate(new Date(event.getEndTime().getTime()));
+        const endingDate = tzOffsetDate(new Date(event.getEndTime().getTime()));
         const endingTime =
           endingDate.getHours() * 100 + endingDate.getMinutes();
+
+        // Is the start time of the event within working hours, or is the ending time within working hours?
         return (
-          startingTime < CONFIG.workingHoursEndAt &&
-          endingTime > CONFIG.workingHoursStartAt
+          (startingTime >= CONFIG.workingHoursStartAt &&
+            startingTime <= CONFIG.workingHoursEndAt) ||
+          (endingTime >= CONFIG.workingHoursStartAt &&
+            endingTime <= CONFIG.workingHoursEndAt)
         );
       },
       day: (event) => {
-        const startTime = offsetedDate(event.getStartTime());
+        const startTime = tzOffsetDate(event.getStartTime());
         return `${startTime.getFullYear()}${startTime.getMonth()}${startTime.getDate()}`;
       },
     };
@@ -138,7 +142,7 @@ const blockFromPersonalCalendars = () => {
 
     const eventsInSecondaryCalendar = getRichEvents(calendarId, now, endDate);
 
-    eventsInSecondaryCalendar
+    const filteredEventsInSecondaryCalendar = eventsInSecondaryCalendar
       .filter(
         withLogging(
           "already known",
@@ -171,31 +175,75 @@ const blockFromPersonalCalendars = () => {
             !CONFIG.skipFreeAvailabilityEvents || !event.showFreeAvailability
         )
       )
-      .forEach((event) => {
-        console.log(
-          `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+      .filter((event) => {
+        const similarEvents = primaryCalendar.getEvents(
+          event.getStartTime(),
+          event.getEndTime(),
+          {
+            search: event.getTitle(),
+          }
         );
-        primaryCalendar
-          .createEvent(
-            CONFIG.blockedEventTitle,
-            event.getStartTime(),
-            event.getEndTime()
-          )
-          .setTag(copiedEventTag, eventTagValue(event))
-          .setColor(CONFIG.color)
-          .removeAllReminders(); // Avoid double notifications
-      });
+        // Find events with the same time and titles on the primary calendar. If they exist, ignore this personal event.
+        if (similarEvents.length > 0) {
+          console.log(
+            `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because there is one or more similar events on the primary calendar`
+          );
+          similarEvents.forEach((sevent) => {
+            console.log(`  - similar event "${sevent.getTitle()}"`);
+          });
+          return false;
+        }
+        return true;
+      })
+      .filter(
+        withLogging(
+          "not going",
+          // Return events that are confirmed as "Yes", "Maybe", or "Owner". null means created.
+          (event) => {
+            return (
+              [
+                null,
+                CalendarApp.GuestStatus.MAYBE,
+                CalendarApp.GuestStatus.YES,
+                CalendarApp.GuestStatus.OWNER,
+              ].indexOf(event.getMyStatus()) >= 0
+            );
+          }
+        )
+      );
 
+    filteredEventsInSecondaryCalendar.forEach((event) => {
+      console.log(
+        `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+      );
+      const newEvent = primaryCalendar.createEvent(
+        CONFIG.blockedEventTitle,
+        event.getStartTime(),
+        event.getEndTime()
+      );
+
+      newEvent
+        .setTag(copiedEventTag, eventTagValue(event))
+        .setVisibility(CalendarApp.Visibility.CONFIDENTIAL)
+        .setColor(CONFIG.color)
+        .removeAllReminders(); // Avoid double notifications
+
+      // This is now a known event
+      knownEvents[eventTagValue(event)] = newEvent;
+    });
+
+    // For each secondary event, get the tag for it
     const tagsOnSecondaryCalendar = new Set(
       eventsInSecondaryCalendar.map(eventTagValue)
     );
+    // For each known event, if it has a copied event tag, but is not on the secondary calendar events, we should delete the block from the primary calendar.
     Object.values(knownEvents)
       .filter(
         (event) => !tagsOnSecondaryCalendar.has(event.getTag(copiedEventTag))
       )
       .forEach((event) => {
         console.log(
-          `🗑️ Need to delete event on ${event.getStartTime()}, as it was removed from personal calendar`
+          `🗑️ Need to delete time block event on ${event.getStartTime()}, as it was removed from personal calendar`
         );
         event.deleteEvent();
       });
