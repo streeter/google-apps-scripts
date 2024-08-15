@@ -14,36 +14,56 @@
 const TIME_BLOCK_MINS = 15;
 
 const isInterviewEvent = (event) => {
-  if (event.getTitle().includes('Team Screen')) return true;
-  if (event.getDescription().includes('Thanks for interviewing')) return true;
-  if (event.getGuestList().find(guest => guest.getName().includes('GoodTime Sync'))) return true;
+  if (!event) {
+    return false;
+  }
+
+  if (event.getTitle().includes("Team Screen")) {
+    return true;
+  }
+  if (event.getDescription().includes("Thanks for interviewing")) {
+    return true;
+  }
+  if (
+    event
+      .getGuestList()
+      .find((guest) => guest.getName().includes("GoodTime Sync"))
+  ) {
+    return true;
+  }
 
   return false;
-}
+};
 
 const hasSpaceForBlockAfter = (cal, eventEnds, timeBlockEnds) => {
   const existingEvents = cal.getEvents(eventEnds, timeBlockEnds);
-  const existingNotAllDayEvents = existingEvents.filter(evt => !evt.isAllDayEvent())
+  const existingNotAllDayEvents = existingEvents.filter(
+    (evt) => !evt.isAllDayEvent()
+  );
   return existingNotAllDayEvents.length === 0; // Don't schedule if there's something there already
-}
+};
 
 const getScorecardLink = (event) => {
   // This is a lazy regex; contributions welcome
-  const link = event.getDescription().match(/https:\/\/app.greenhouse.io\/guides\/[^ <"]+/);
+  const link = event
+    .getDescription()
+    .match(/https:\/\/app.greenhouse.io\/guides\/[^ <"]+/);
   return link ? link[0] : "";
-}
+};
 
 const eventCancelled = (cal, event) => {
   // This is stupid but you can't check if events have been deleted
   // without reaching into the "real" Google Calendar API
   const eventId = event.getId().split("@")[0]; // gcal api only utilizes the first part of the id
   return Calendar.Events.get(cal.getId(), eventId).status === "cancelled";
-}
+};
 
 const interviewInOriginalSpot = (cal, event, interviewId) => {
   const interview = cal.getEventById(interviewId);
   if (!interview) {
-    console.log(`Couldn't find event with ID ${interivewId}; assuming event still exists to be safe`);
+    console.log(
+      `Couldn't find event with ID ${interivewId}; assuming event still exists to be safe`
+    );
     return true; // fail closed if we can't find the interview event tagged on the scorecard block
   }
 
@@ -56,7 +76,7 @@ const interviewInOriginalSpot = (cal, event, interviewId) => {
   }
 
   return true; // interview still in original spot
-}
+};
 
 // Tag for tracking events created by this script
 const SCORECARD_TAG = "interview_scorecard_autoscheduled";
@@ -66,48 +86,67 @@ const SCORECARD_TAG = "interview_scorecard_autoscheduled";
 // even if the surrounding logic changes
 const deleteInterviewBlock = (event) => {
   if (
-    !event.getAllTagKeys().includes(SCORECARD_TAG) // has tag
-    || !event.getTag(SCORECARD_TAG) // tag is non-null
-    || event.getTag(SCORECARD_TAG).length === 0 // tag has content set
+    !event.getAllTagKeys().includes(SCORECARD_TAG) || // has tag
+    !event.getTag(SCORECARD_TAG) || // tag is non-null
+    event.getTag(SCORECARD_TAG).length === 0 // tag has content set
   ) {
-    console.log(`skipping bad event deletion for ${event.getTitle()}`);
+    console.log(`Skipping bad event deletion for ${event.getTitle()}`);
     return;
   }
 
-  console.log(`deleting ${event.getTitle()}`);
+  console.log(`Deleting ${event.getTitle()}`);
   event.deleteEvent();
-}
+};
 
-function main() {
+function scheduleInterviewFeedback() {
   const today = new Date();
-  const twoWeeksFromNow = new Date(Date.now() + (14 * 24 * 60 * 60 * 1000));
+  const twoWeeksFromNow = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
 
   const cal = CalendarApp.getDefaultCalendar();
   const myEvents = cal.getEvents(today, twoWeeksFromNow);
 
-  myEvents.forEach(event => {
+  myEvents.forEach((event) => {
+    console.log(`Looking at "${event.getTitle()}" (${event.getStartTime()})`);
+
     // If this is an event we've created in the past, check if the interview
     // has been canceled or rescheduled and we need to remove the block
     const eventData = event.getTag(SCORECARD_TAG);
-    if (eventData && eventData.length > 0 && !interviewInOriginalSpot(cal, event, eventData)) {
+    if (
+      eventData &&
+      eventData.length > 0 &&
+      !interviewInOriginalSpot(cal, event, eventData)
+    ) {
       deleteInterviewBlock(event);
     }
 
-    const eventEnds = event.getEndTime()
-    const timeBlockEnds = new Date(eventEnds.getTime() + TIME_BLOCK_MINS*60000);
+    const eventEnds = event.getEndTime();
+    const timeBlockEnds = new Date(
+      eventEnds.getTime() + TIME_BLOCK_MINS * 60000
+    );
 
-    if (isInterviewEvent(event) && hasSpaceForBlockAfter(cal, eventEnds, timeBlockEnds)) {
-      const location = getScorecardLink(event);
-      const createdEvent = cal.createEvent(
-        "Fill out interview scorecard",
-        eventEnds,
-        timeBlockEnds,
-        {
-          "location": location,
-          "description": "Generated with https://git.corp.stripe.com/cameron/scripts/blob/master/scorecard.js",
-        }
-      );
-      createdEvent.setTag(SCORECARD_TAG, event.getId());
+    if (isInterviewEvent(event)) {
+      console.log(`Scheduling feedback block for ${event.getTitle()}`);
+      if (hasSpaceForBlockAfter(cal, eventEnds, timeBlockEnds)) {
+        const location = getScorecardLink(event);
+        const createdEvent = cal.createEvent(
+          "Fill out interview scorecard",
+          eventEnds,
+          timeBlockEnds,
+          {
+            location: location,
+            description:
+              "Generated with https://github.com/streeter/google-apps-scripts",
+          }
+        );
+        createdEvent
+          .setTag(SCORECARD_TAG, event.getId())
+          .setVisibility(CalendarApp.Visibility.CONFIDENTIAL)
+          .removeAllReminders(); // Avoid double notifications
+      } else {
+        console.log(
+          `Not scheduling feedback block for ${event.getTitle()} because there's already something there`
+        );
+      }
     }
-  })
+  });
 }

@@ -3,5 +3,5 @@ function GetColorEventVips() {
 }
 
 function GetColorEventOrgNames() {
-  return ["mips-team@", "tech@"];
+  return ["connect-team@", "tech@"];
 }

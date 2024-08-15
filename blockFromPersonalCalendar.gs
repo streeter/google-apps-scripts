@@ -17,7 +17,7 @@ const CONFIG = {
   blockedEventTitle: "Busy", // the title to use in the created events in the (work) calendar
   skipWeekends: true, // if weekend events should be skipped or not
   skipFreeAvailabilityEvents: true, // don't block events that set visibility as "Free" in the personal calendar
-  workingHoursStartAt: 900, // any events ending before this time will be skipped. Use 0 if you don't care about working hours
+  workingHoursStartAt: 830, // any events ending before this time will be skipped. Use 0 if you don't care about working hours
   workingHoursEndAt: 1800, // any events starting after this time will be skipped. Use 2300
   assumeAllDayEventsInWorkCalendarIsOOO: false, // if the work calendar has an all-day event, assume it's an Out Of Office day, and don't block times
   color: CalendarApp.EventColor.YELLOW, // set the color of any newly created events (see https://developers.google.com/apps-script/reference/calendar/event-color)
@@ -47,9 +47,20 @@ const blockFromPersonalCalendars = () => {
    * to a Date object, ensures that the absolute numbers for day/hour/minute maintained, which is what we use in the configuration.
    */
   const CalendarAwareTimeConverter = (calendar) => {
-    const timeZone = calendar.getTimeZone();
+    // Load moment.js to be able to do date operations
+    eval(
+      UrlFetchApp.fetch(
+        "https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"
+      ).getContentText()
+    );
+    eval(
+      UrlFetchApp.fetch(
+        "https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.41/moment-timezone-with-data.min.js"
+      ).getContentText()
+    );
 
-    const tzOffsetDate = (date) => moment(date).tz(timeZone).toDate();
+    const timeZone = calendar.getTimeZone();
+    const offsetedDate = (date) => moment(date).tz(timeZone);
 
     /*
      * Return functions that compare the given event (likely from a different calendar),
@@ -57,18 +68,14 @@ const blockFromPersonalCalendars = () => {
      */
     return {
       isInAWeekend: (event) => {
-        const day = tzOffsetDate(event.getStartTime()).getDay();
+        const day = offsetedDate(event.getStartTime()).day();
         return day != 0 && day != 6;
       },
       isOutOfWorkHours: (event) => {
-        const startingDate = tzOffsetDate(
-          new Date(event.getStartTime().getTime())
-        );
-        const startingTime =
-          startingDate.getHours() * 100 + startingDate.getMinutes();
-        const endingDate = tzOffsetDate(new Date(event.getEndTime().getTime()));
-        const endingTime =
-          endingDate.getHours() * 100 + endingDate.getMinutes();
+        const startingDate = offsetedDate(event.getStartTime());
+        const startingTime = startingDate.hour() * 100 + startingDate.minute();
+        const endingDate = offsetedDate(event.getEndTime());
+        const endingTime = endingDate.hour() * 100 + endingDate.minute();
 
         // Is the start time of the event within working hours, or is the ending time within working hours?
         return (
@@ -79,8 +86,8 @@ const blockFromPersonalCalendars = () => {
         );
       },
       day: (event) => {
-        const startTime = tzOffsetDate(event.getStartTime());
-        return `${startTime.getFullYear()}${startTime.getMonth()}${startTime.getDate()}`;
+        const startTime = offsetedDate(event.getStartTime());
+        return `${startTime.year()}${startTime.month()}${startTime.date()}`;
       },
     };
   };
@@ -92,13 +99,13 @@ const blockFromPersonalCalendars = () => {
    * exposing that in the future, there won't be a need to continue doing this.
    */
   const getRichEvents = (calendarId, start, end) => {
-    const calendar = CalendarApp.getCalendarById(calendarId);
-    if (!calendar) {
+    const secondaryCalendar = CalendarApp.getCalendarById(calendarId);
+    if (!secondaryCalendar) {
       return [];
     }
-    const richEvents = calendar.getEvents(start, end);
+    const richEvents = secondaryCalendar.getEvents(start, end);
     const freeAvailabilityEvents = new Set(
-      calendar
+      secondaryCalendar
         .getEvents(start, end)
         .filter((event) => event.transparency === "transparent")
         .map((event) => event.iCalUID)
@@ -111,6 +118,26 @@ const blockFromPersonalCalendars = () => {
 
   const eventTagValue = (event) =>
     `${event.getId()}-${event.getStartTime().toISOString()}`;
+
+  const hasTimeChanges = (event, knownEvent) => {
+    const eventStartTime = event.getStartTime();
+    const knownEventStartTime = knownEvent.getStartTime();
+    const eventEndTime = event.getEndTime();
+    const knownEventEndTime = knownEvent.getEndTime();
+    return (
+      eventStartTime.valueOf() !== knownEventStartTime.valueOf() ||
+      eventEndTime.valueOf() !== knownEventEndTime.valueOf()
+    );
+  };
+
+  const mightAttend = (event, calendarId) => {
+    return (
+      event
+        .getGuestsStatus()
+        .find((s) => s.getEmail() === calendarId)
+        ?.getStatus() !== "no"
+    );
+  };
 
   CONFIG.calendarIds.forEach((calendarId) => {
     console.log(`📆 Processing secondary calendar ${calendarId}`);
@@ -144,10 +171,12 @@ const blockFromPersonalCalendars = () => {
 
     const filteredEventsInSecondaryCalendar = eventsInSecondaryCalendar
       .filter(
-        withLogging(
-          "already known",
-          (event) => !knownEvents.hasOwnProperty(eventTagValue(event))
-        )
+        withLogging("already known", (event) => {
+          return (
+            !knownEvents.hasOwnProperty(eventTagValue(event)) ||
+            hasTimeChanges(event, knownEvents[eventTagValue(event)])
+          );
+        })
       )
       .filter(
         withLogging("outside of work hours", (event) =>
@@ -176,6 +205,7 @@ const blockFromPersonalCalendars = () => {
         )
       )
       .filter((event) => {
+        // Look for similar events
         const similarEvents = primaryCalendar.getEvents(
           event.getStartTime(),
           event.getEndTime(),
@@ -213,13 +243,25 @@ const blockFromPersonalCalendars = () => {
       );
 
     filteredEventsInSecondaryCalendar.forEach((event) => {
-      console.log(
-        `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
-      );
+      const knownEvent = knownEvents[eventTagValue(event)];
+      if (knownEvent) {
+        console.log(
+          `📝 Need to edit "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+        );
+        knownEvent.deleteEvent();
+      } else {
+        console.log(
+          `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+        );
+      }
       const newEvent = primaryCalendar.createEvent(
         CONFIG.blockedEventTitle,
         event.getStartTime(),
-        event.getEndTime()
+        event.getEndTime(),
+        {
+          description:
+            "Generated with https://github.com/streeter/google-apps-scripts",
+        }
       );
 
       newEvent
@@ -247,6 +289,20 @@ const blockFromPersonalCalendars = () => {
         );
         event.deleteEvent();
       });
+
+    if (CONFIG.skipNotAttending) {
+      eventsInSecondaryCalendar
+        .filter((event) => !mightAttend(event, calendarId))
+        .forEach((event) => {
+          const knownEvent = knownEvents[eventTagValue(event)];
+          if (knownEvent) {
+            console.log(
+              `🗑️ Need to delete event on ${event.getStartTime()}, as it was marked as not attending`
+            );
+            knownEvent.deleteEvent();
+          }
+        });
+    }
   });
 };
 
