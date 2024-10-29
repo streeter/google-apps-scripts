@@ -71,7 +71,7 @@ const blockFromPersonalCalendars = () => {
         const day = offsetedDate(event.getStartTime()).day();
         return day != 0 && day != 6;
       },
-      isOutOfWorkHours: (event) => {
+      isInWorkHours: (event) => {
         const startingDate = offsetedDate(event.getStartTime());
         const startingTime = startingDate.hour() * 100 + startingDate.minute();
         const endingDate = offsetedDate(event.getEndTime());
@@ -179,8 +179,20 @@ const blockFromPersonalCalendars = () => {
         })
       )
       .filter(
+        withLogging("invited work email", (event) => {
+          const guests = event.getGuestList();
+          for (let i = 0; i < guests.length; i++) {
+            const guestEmail = guests[i].getEmail();
+            if (guestEmail.includes(GetSelfEmail())) {
+              return false;
+            }
+          }
+          return true;
+        })
+      )
+      .filter(
         withLogging("outside of work hours", (event) =>
-          timeZoneAware.isOutOfWorkHours(event)
+          timeZoneAware.isInWorkHours(event)
         )
       )
       .filter(
