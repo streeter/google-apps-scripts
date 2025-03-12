@@ -104,14 +104,9 @@ const blockFromPersonalCalendars = () => {
       return [];
     }
     const richEvents = secondaryCalendar.getEvents(start, end);
-    const freeAvailabilityEvents = new Set(
-      secondaryCalendar
-        .getEvents(start, end)
-        .filter((event) => event.getTransparency() === "TRANSPARENT")
-        .map((event) => event.iCalUID)
-    );
     richEvents.forEach((event) => {
-      event.isAvailabilityFree = freeAvailabilityEvents.has(event.getId());
+      event.isAvailabilityFree = event.getTransparency() == 'TRANSPARENT';
+      console.log(`event ${event.getTitle()} is with transparency ${event.getTransparency()} is marked as ${event.isAvailabilityFree}`);
     });
     return richEvents;
   };
@@ -296,7 +291,7 @@ const blockFromPersonalCalendars = () => {
       )
       .forEach((event) => {
         console.log(
-          `🗑️ Need to delete time block event on ${event.getStartTime()}, as it was removed from personal calendar`
+          `🗑️ Need to delete time block event ${event.getTitle()} on ${event.getStartTime()}, as it was removed from personal calendar`
         );
         event.deleteEvent();
       });
@@ -308,7 +303,20 @@ const blockFromPersonalCalendars = () => {
           const knownEvent = knownEvents[eventTagValue(event)];
           if (knownEvent) {
             console.log(
-              `🗑️ Need to delete event on ${event.getStartTime()}, as it was marked as not attending`
+              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it was marked as not attending`
+            );
+            knownEvent.deleteEvent();
+          }
+        });
+    }
+    if (CONFIG.skipFreeAvailabilityEvents) {
+      eventsInSecondaryCalendar
+        .filter((event) => event.isAvailabilityFree)
+        .forEach((event) => {
+          const knownEvent = knownEvents[eventTagValue(event)];
+          if (knownEvent) {
+            console.log(
+              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it has a free availability`
             );
             knownEvent.deleteEvent();
           }
