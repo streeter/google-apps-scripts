@@ -107,11 +107,11 @@ const blockFromPersonalCalendars = () => {
     const freeAvailabilityEvents = new Set(
       secondaryCalendar
         .getEvents(start, end)
-        .filter((event) => event.transparency === "transparent")
+        .filter((event) => event.getTransparency() === "TRANSPARENT")
         .map((event) => event.iCalUID)
     );
     richEvents.forEach((event) => {
-      event.showFreeAvailability = freeAvailabilityEvents.has(event.getId());
+      event.isAvailabilityFree = freeAvailabilityEvents.has(event.getId());
     });
     return richEvents;
   };
@@ -212,8 +212,7 @@ const blockFromPersonalCalendars = () => {
       .filter(
         withLogging(
           'marked as "Free" availabilty or is full day',
-          (event) =>
-            !CONFIG.skipFreeAvailabilityEvents || !event.showFreeAvailability
+          (event) => !(event.isAvailabilityFree && CONFIG.skipFreeAvailabilityEvents)
         )
       )
       .filter((event) => {
