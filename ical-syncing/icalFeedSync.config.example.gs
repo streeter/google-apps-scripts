@@ -34,6 +34,10 @@ function getIcalSyncConfig() {
           "https://ssprodst.blob.core.windows.net/calendars/316/46131.ics",
         calendarId: "REPLACE_WITH_COLE_CALENDAR_ID@group.calendar.google.com",
 
+        // Optional per-feed title prefix for all synced event titles.
+        // Example: "[Cole]" -> "[Cole] Practice"
+        titlePrefix: "",
+
         // Optional per-feed attendee override.
         // If empty, defaultAttendeeEmails is used.
         attendeeEmails: [],
@@ -50,6 +54,7 @@ function getIcalSyncConfig() {
       //   name: "Another Calendar",
       //   feedUrl: "https://example.com/another.ics",
       //   calendarId: "another_calendar_id@group.calendar.google.com",
+      //   titlePrefix: "[Another]",
       //   attendeeEmails: ["special-person@yourcompany.com"]
       // }
     ],

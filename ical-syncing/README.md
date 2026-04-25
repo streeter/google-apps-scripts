@@ -26,6 +26,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 4. Run `listMyCalendarIds()` once (or run `syncIcalFeeds()` once) to print accessible calendar names and IDs in logs.
 5. Edit `icalFeedSync.config.gs`:
    - Set `calendarId` for each feed mapping.
+   - Optionally set per-feed `titlePrefix` (for example `[Sports]`).
    - Set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
 6. In Apps Script editor:
@@ -54,6 +55,7 @@ function getIcalSyncConfig() {
         name: "Cole Streeter",
         feedUrl: "https://example.com/calendar.ics",
         calendarId: "your_calendar_id@group.calendar.google.com",
+        titlePrefix: "[Sports]",
         attendeeEmails: [],
         addDriveTimePlaceholders: true,
         originAddress: "",
@@ -68,6 +70,7 @@ function getIcalSyncConfig() {
 ## Notes
 
 - `feedMappings` can include many feed -> calendar routes.
+- Per-feed `titlePrefix` prepends synced event titles for that feed.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when non-empty.
 - Per-feed `addDriveTimePlaceholders` controls whether drive placeholders are managed for that feed.
 - Placeholders are only created when computed drive time is strictly greater than `minDriveMinutesToCreate` (default `10`).

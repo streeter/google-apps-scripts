@@ -163,6 +163,19 @@ test("getIcalSyncConfig_ defaults minDriveMinutesToCreate to 10", () => {
   assert.equal(cfg.minDriveMinutesToCreate, 10);
 });
 
+test("getIcalSyncConfig_ defaults per-feed titlePrefix to empty string", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+
+  assert.equal(cfg.feedMappings[0].titlePrefix, "");
+});
+
 test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
   const ctx = loadIcalSyncContext();
   const calls = [];
@@ -233,6 +246,23 @@ test("unescapeIcsText_ converts escaped and double-escaped newlines", () => {
     ctx.unescapeIcsText_("Event Type: Practice\\\\nHome/Away: Home\\\\n\\\\n"),
     "Event Type: Practice\nHome/Away: Home\n\n",
   );
+});
+
+test("applyEventTitlePrefix_ prefixes summary and preserves original event object", () => {
+  const ctx = loadIcalSyncContext();
+  const evt = {
+    uid: "uid-1",
+    summary: "Practice",
+    start: { type: "dateTime", dateTime: "2099-05-01T15:00:00Z" },
+    end: { type: "dateTime", dateTime: "2099-05-01T16:00:00Z" },
+  };
+
+  const prefixed = ctx.applyEventTitlePrefix_(evt, "[Sports]");
+  assert.equal(prefixed.summary, "[Sports] Practice");
+  assert.equal(evt.summary, "Practice");
+
+  const unchanged = ctx.applyEventTitlePrefix_(evt, "   ");
+  assert.equal(unchanged, evt);
 });
 
 test("shouldSyncEvent_ respects cutoff date", () => {
@@ -455,6 +485,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
     feedUrl: "https://example.com/feed.ics",
     calendarId: "calendar-1",
     attendeeEmails: [],
+    titlePrefix: "[Sports]",
     addDriveTimePlaceholders: true,
     originAddress: "",
   };
@@ -478,6 +509,8 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
 
   assert.ok(source);
   assert.ok(drive);
+  assert.equal(source.summary, "[Sports] Client Meeting");
+  assert.equal(drive.summary, "Drive (25m) to [Sports] Client Meeting");
   assert.equal(
     drive.extendedProperties.private.sourceEventId,
     "source-created-1",

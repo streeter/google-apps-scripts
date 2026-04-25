@@ -170,6 +170,7 @@ function syncOneFeed_(cfg, mapping, today) {
   };
 
   parsed.events.forEach(function (evt) {
+    const effectiveEvt = applyEventTitlePrefix_(evt, mapping.titlePrefix);
     const syncKey = buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey);
     const driveSyncKey = buildDriveSyncKey_(syncKey);
     seen[syncKey] = true;
@@ -214,16 +215,18 @@ function syncOneFeed_(cfg, mapping, today) {
       return;
     }
 
-    if (!shouldSyncEvent_(evt, today)) {
+    if (!shouldSyncEvent_(effectiveEvt, today)) {
       stats.skipped++;
       console.info(
-        '[SKIP] Pre-today event "' + (evt.summary || "(No title)") + '"',
+        '[SKIP] Pre-today event "' +
+          (effectiveEvt.summary || "(No title)") +
+          '"',
       );
       return;
     }
 
     const createResource = buildEventResource_(
-      evt,
+      effectiveEvt,
       mapping.feedUrl,
       feedHash,
       syncKey,
@@ -231,7 +234,7 @@ function syncOneFeed_(cfg, mapping, today) {
       parsed.calendarTimezone,
     );
 
-    const newHash = computeEventHash_(evt, attendees);
+    const newHash = computeEventHash_(effectiveEvt, attendees);
     createResource.extendedProperties.private.syncHash = newHash;
 
     if (!existing) {
@@ -241,9 +244,9 @@ function syncOneFeed_(cfg, mapping, today) {
         { sendUpdates: "none" },
       );
       stats.created++;
-      console.log('[CREATE] "' + (evt.summary || "(No title)") + '"');
+      console.log('[CREATE] "' + (effectiveEvt.summary || "(No title)") + '"');
       reconcileDrivePlaceholder_(
-        evt,
+        effectiveEvt,
         inserted,
         mapping,
         feedHash,
@@ -277,7 +280,7 @@ function syncOneFeed_(cfg, mapping, today) {
       ((existing.extendedProperties || {}).private || {}).syncHash || "";
     const changedFromLastFeedState = oldHash !== newHash;
     const patchResource = buildEventPatchResource_(
-      evt,
+      effectiveEvt,
       mapping.feedUrl,
       feedHash,
       syncKey,
@@ -298,7 +301,7 @@ function syncOneFeed_(cfg, mapping, today) {
       console.log("[UPDATE] Event " + existing.id + " (forced resync)");
     }
     reconcileDrivePlaceholder_(
-      evt,
+      effectiveEvt,
       patched,
       mapping,
       feedHash,
@@ -422,6 +425,7 @@ function getIcalSyncConfig_() {
     if (!m.calendarId)
       throw new Error("feedMappings[" + i + "] missing calendarId.");
     if (!Array.isArray(m.attendeeEmails)) m.attendeeEmails = [];
+    if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
     if (typeof m.originAddress !== "string") m.originAddress = "";
@@ -851,6 +855,19 @@ function computeEventHash_(evt, attendees) {
     attendees: attendees.slice().sort(),
   };
   return sha256Hex_(JSON.stringify(normalized));
+}
+
+/**
+ * Applies a per-feed title prefix to a feed event title and returns a copied event object.
+ */
+function applyEventTitlePrefix_(evt, titlePrefix) {
+  if (!evt || typeof evt !== "object") return evt;
+  const prefix = String(titlePrefix || "").trim();
+  if (!prefix) return evt;
+  const baseTitle = (evt.summary || "(No title)").trim() || "(No title)";
+  const copied = Object.assign({}, evt);
+  copied.summary = prefix + " " + baseTitle;
+  return copied;
 }
 
 /**
