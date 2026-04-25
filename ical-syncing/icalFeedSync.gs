@@ -284,7 +284,7 @@ function syncOneFeed_(cfg, mapping, today) {
         seenArrival,
         today,
         stats,
-        attendees,
+        sourceAttendees,
       );
       reconcileDrivePlaceholder_(
         effectiveEvt,
@@ -300,7 +300,7 @@ function syncOneFeed_(cfg, mapping, today) {
         stats,
         driveDurationCache,
         arrivalAnchorStart,
-        attendees,
+        sourceAttendees,
       );
       return;
     }
@@ -401,7 +401,7 @@ function syncOneFeed_(cfg, mapping, today) {
       seenArrival,
       today,
       stats,
-      attendees,
+      sourceAttendees,
     );
     reconcileDrivePlaceholder_(
       effectiveEvt,
@@ -417,7 +417,7 @@ function syncOneFeed_(cfg, mapping, today) {
       stats,
       driveDurationCache,
       arrivalAnchorStart,
-      attendees,
+      sourceAttendees,
     );
   });
 

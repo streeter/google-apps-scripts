@@ -1115,6 +1115,8 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
     JSON.stringify([
       { email: "coach@example.com" },
       { email: "parent@example.com" },
+      { email: "owner@example.com" },
+      { email: "b@example.com" },
     ]),
   );
   assert.equal(
@@ -1122,6 +1124,8 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
     JSON.stringify([
       { email: "coach@example.com" },
       { email: "parent@example.com" },
+      { email: "owner@example.com" },
+      { email: "b@example.com" },
     ]),
   );
 });
