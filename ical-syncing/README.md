@@ -10,10 +10,11 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 ## What the script does
 
 - Pulls each configured iCal feed URL.
-- Syncs future events into the configured local Google Calendar.
-- Updates local events when upstream iCal event details change.
+- Syncs only events that are on or after the current date into the configured local Google Calendar.
+- Forces synced local events to match upstream feed fields on each run (including start/end date and time).
+- Overwrites local edits to synced events on subsequent sync runs.
 - Deletes local synced events when an upstream event is canceled.
-- Optionally deletes future local synced events that are no longer present in the feed (`deleteMissingFromFeed`).
+- Optionally deletes only on/after-today local synced events that are no longer present in the feed (`deleteMissingFromFeed`).
 - Adds configured attendee emails to synced events.
 
 ## Setup
@@ -56,3 +57,4 @@ function getIcalSyncConfig() {
 - `feedMappings` can include many feed -> calendar routes.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when non-empty.
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
+- Delete operations are guarded to only remove events that are verifiably managed by this script/feed.

@@ -31,13 +31,16 @@ function setupIcalFeedSyncTrigger() {
 
 function syncIcalFeeds() {
   const cfg = getIcalSyncConfig_();
-  const now = new Date();
+  const today = startOfToday_();
   const results = [];
+  console.log("[SYNC] Starting iCal feed sync for " + cfg.feedMappings.length + " feed(s)");
+  console.log("[SYNC] Date cutoff (inclusive): " + today.toISOString());
 
   cfg.feedMappings.forEach(function(mapping) {
     try {
-      results.push(syncOneFeed_(cfg, mapping, now));
+      results.push(syncOneFeed_(cfg, mapping, today));
     } catch (e) {
+      console.error("[ERROR] Failed syncing feed " + (mapping.name || mapping.feedUrl) + ": " + String(e));
       results.push({
         feed: mapping.name || mapping.feedUrl,
         error: String(e)
@@ -45,24 +48,31 @@ function syncIcalFeeds() {
     }
   });
 
+  console.log("[SYNC] Finished iCal feed sync");
   Logger.log(JSON.stringify(results, null, 2));
 }
 
-function syncOneFeed_(cfg, mapping, now) {
+function syncOneFeed_(cfg, mapping, today) {
   const feedHash = sha256Hex_(mapping.feedUrl).slice(0, 16);
+  const feedName = mapping.name || mapping.feedUrl;
   const attendees = uniqueEmails_(
     (mapping.attendeeEmails && mapping.attendeeEmails.length
       ? mapping.attendeeEmails
       : cfg.defaultAttendeeEmails) || []
   );
+  console.log("[FEED] Processing \"" + feedName + "\" -> " + mapping.calendarId);
 
   const icsText = fetchIcs_(mapping.feedUrl);
   const parsed = parseIcs_(icsText);
   const existingByKey = loadExistingEventsByKey_(mapping.calendarId, feedHash);
+  console.log(
+    "[INFO] Feed \"" + feedName + "\" has " + parsed.events.length + " VEVENT(s); found " +
+      Object.keys(existingByKey).length + " existing managed event(s)"
+  );
 
   const seen = {};
   const stats = {
-    feed: mapping.name || mapping.feedUrl,
+    feed: feedName,
     created: 0,
     updated: 0,
     deleted: 0,
@@ -76,21 +86,35 @@ function syncOneFeed_(cfg, mapping, now) {
     const existing = existingByKey[syncKey];
 
     if (evt.cancelled) {
+      if (!isEventOnOrAfterCutoff_(evt, today)) {
+        stats.skipped++;
+        console.info("[SKIP] Not processing cancel for pre-today event");
+        return;
+      }
       if (existing) {
-        Calendar.Events.remove(mapping.calendarId, existing.id);
-        stats.deleted++;
+        if (isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
+          Calendar.Events.remove(mapping.calendarId, existing.id);
+          stats.deleted++;
+          console.log("[DELETE] Deleted canceled event " + existing.id + " from " + feedName);
+        } else {
+          stats.skipped++;
+          console.info(
+            "[SKIP] Not deleting non-managed event " + existing.id + " (cancelled upstream)"
+          );
+        }
       } else {
         stats.skipped++;
       }
       return;
     }
 
-    if (!shouldSyncEvent_(evt, now)) {
+    if (!shouldSyncEvent_(evt, today)) {
       stats.skipped++;
+      console.info("[SKIP] Pre-today event \"" + (evt.summary || "(No title)") + "\"");
       return;
     }
 
-    const resource = buildEventResource_(
+    const createResource = buildEventResource_(
       evt,
       mapping.feedUrl,
       feedHash,
@@ -100,22 +124,41 @@ function syncOneFeed_(cfg, mapping, now) {
     );
 
     const newHash = computeEventHash_(evt, attendees);
-    resource.extendedProperties.private.syncHash = newHash;
+    createResource.extendedProperties.private.syncHash = newHash;
 
     if (!existing) {
-      Calendar.Events.insert(resource, mapping.calendarId, { sendUpdates: "none" });
+      Calendar.Events.insert(createResource, mapping.calendarId, { sendUpdates: "none" });
       stats.created++;
+      console.log("[CREATE] \"" + (evt.summary || "(No title)") + "\"");
+      return;
+    }
+
+    if (!isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
+      stats.skipped++;
+      console.info(
+        "[SKIP] Not updating event " + existing.id + " because it is not managed by this feed"
+      );
       return;
     }
 
     const oldHash =
       (((existing.extendedProperties || {}).private || {}).syncHash) || "";
-
-    if (oldHash !== newHash) {
-      Calendar.Events.patch(resource, mapping.calendarId, existing.id, { sendUpdates: "none" });
-      stats.updated++;
+    const changedFromLastFeedState = oldHash !== newHash;
+    const patchResource = buildEventPatchResource_(
+      evt,
+      mapping.feedUrl,
+      feedHash,
+      syncKey,
+      attendees,
+      parsed.calendarTimezone
+    );
+    patchResource.extendedProperties.private.syncHash = newHash;
+    Calendar.Events.patch(patchResource, mapping.calendarId, existing.id, { sendUpdates: "none" });
+    stats.updated++;
+    if (changedFromLastFeedState) {
+      console.log("[UPDATE] Event " + existing.id + " (feed change detected)");
     } else {
-      stats.unchanged++;
+      console.log("[UPDATE] Event " + existing.id + " (forced resync)");
     }
   });
 
@@ -123,13 +166,26 @@ function syncOneFeed_(cfg, mapping, now) {
     Object.keys(existingByKey).forEach(function(syncKey) {
       if (seen[syncKey]) return;
       const ev = existingByKey[syncKey];
-      if (isFutureEventResource_(ev, now)) {
+      if (!isManagedEventForFeed_(ev, mapping.feedUrl, feedHash)) {
+        console.info("[SKIP] Not deleting non-managed event " + ev.id);
+        return;
+      }
+      if (isFutureEventResource_(ev, today)) {
         Calendar.Events.remove(mapping.calendarId, ev.id);
         stats.deleted++;
+        console.log("[DELETE] Deleted feed-missing event " + ev.id + " from " + feedName);
       }
     });
   }
 
+  console.log(
+    "[SUMMARY] Feed \"" + feedName + "\": " +
+      "created=" + stats.created +
+      ", updated=" + stats.updated +
+      ", deleted=" + stats.deleted +
+      ", unchanged=" + stats.unchanged +
+      ", skipped=" + stats.skipped
+  );
   return stats;
 }
 
@@ -357,20 +413,20 @@ function defaultEndFromStart_(start) {
   };
 }
 
-function shouldSyncEvent_(evt, now) {
+function shouldSyncEvent_(evt, cutoffDate) {
   if (evt.cancelled) return true;
   if (!evt.start || !evt.end) return false;
 
   if (evt.recurrence && evt.recurrence.length) {
-    return !recurrenceEnded_(evt.recurrence, now);
+    return !recurrenceEnded_(evt.recurrence, cutoffDate);
   }
 
   const end = parsedDateToDate_(evt.end);
   if (!end || isNaN(end.getTime())) return true;
-  return end.getTime() >= now.getTime();
+  return end.getTime() >= cutoffDate.getTime();
 }
 
-function recurrenceEnded_(recurrenceLines, now) {
+function recurrenceEnded_(recurrenceLines, cutoffDate) {
   for (let i = 0; i < recurrenceLines.length; i++) {
     const line = recurrenceLines[i];
     if (line.toUpperCase().indexOf("RRULE:") !== 0) continue;
@@ -381,7 +437,7 @@ function recurrenceEnded_(recurrenceLines, now) {
       if (parts[j].indexOf("UNTIL=") !== 0) continue;
       const untilRaw = parts[j].substring("UNTIL=".length);
       const untilDate = parseUntilDate_(untilRaw);
-      if (untilDate && untilDate.getTime() < now.getTime()) return true;
+      if (untilDate && untilDate.getTime() < cutoffDate.getTime()) return true;
     }
   }
   return false;
@@ -405,6 +461,10 @@ function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbac
     location: evt.location || "",
     start: toGoogleDate_(evt.start, fallbackTz),
     end: toGoogleDate_(evt.end, fallbackTz),
+    visibility: "default",
+    guestsCanModify: false,
+    guestsCanInviteOthers: false,
+    guestsCanSeeOtherGuests: true,
     attendees: attendees.map(function(email) {
       return { email: email };
     }),
@@ -421,6 +481,36 @@ function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbac
   if (evt.recurrence && evt.recurrence.length) {
     resource.recurrence = evt.recurrence.slice();
   }
+
+  return resource;
+}
+
+function buildEventPatchResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbackTz) {
+  const resource = {
+    summary: evt.summary || "(No title)",
+    description: evt.description || "",
+    location: evt.location || "",
+    start: toGoogleDate_(evt.start, fallbackTz),
+    end: toGoogleDate_(evt.end, fallbackTz),
+    visibility: "default",
+    guestsCanModify: false,
+    guestsCanInviteOthers: false,
+    guestsCanSeeOtherGuests: true,
+    attendees: attendees.map(function(email) {
+      return { email: email };
+    }),
+    extendedProperties: {
+      private: {
+        sourceFeed: feedHash,
+        sourceUrl: feedUrl,
+        sourceUid: evt.uid,
+        syncKey: syncKey
+      }
+    }
+  };
+
+  // Explicitly include recurrence in patches so existing recurring state is replaced by upstream truth.
+  resource.recurrence = evt.recurrence && evt.recurrence.length ? evt.recurrence.slice() : [];
 
   return resource;
 }
@@ -480,9 +570,19 @@ function loadExistingEventsByKey_(calendarId, feedHash) {
   return out;
 }
 
-function isFutureEventResource_(ev, now) {
+function isManagedEventForFeed_(ev, feedUrl, feedHash) {
+  const p = ((ev.extendedProperties || {}).private) || {};
+  if (!p.syncKey || typeof p.syncKey !== "string") return false;
+  if (p.syncKey.indexOf(feedHash + ":") !== 0) return false;
+  if (p.sourceFeed !== feedHash) return false;
+  if (p.sourceUrl !== feedUrl) return false;
+  if (!p.sourceUid) return false;
+  return true;
+}
+
+function isFutureEventResource_(ev, cutoffDate) {
   if (ev.recurrence && ev.recurrence.length) {
-    return !recurrenceEnded_(ev.recurrence, now);
+    return !recurrenceEnded_(ev.recurrence, cutoffDate);
   }
 
   const end = ev.end || ev.start || null;
@@ -493,7 +593,14 @@ function isFutureEventResource_(ev, now) {
   if (end.date) when = new Date(end.date + "T00:00:00");
 
   if (!when || isNaN(when.getTime())) return true;
-  return when.getTime() >= now.getTime();
+  return when.getTime() >= cutoffDate.getTime();
+}
+
+function isEventOnOrAfterCutoff_(evt, cutoffDate) {
+  if (!evt || (!evt.start && !evt.end)) return false;
+  const anchor = parsedDateToDate_(evt.end || evt.start);
+  if (!anchor || isNaN(anchor.getTime())) return false;
+  return anchor.getTime() >= cutoffDate.getTime();
 }
 
 function parsedDateToDate_(parsed) {
@@ -554,4 +661,10 @@ function formatLocalDateTime_(d) {
     ":" + p(d.getMinutes()) +
     ":" + p(d.getSeconds())
   );
+}
+
+function startOfToday_() {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  return now;
 }

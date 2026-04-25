@@ -7,7 +7,7 @@ function getIcalSyncConfig() {
   return {
     // Trigger frequency for setupIcalFeedSyncTrigger()
     // Valid Apps Script values: 1, 5, 10, 15, 30
-    triggerEveryMinutes: 15,
+    triggerEveryMinutes: 60,
 
     // If true, remove future local events previously synced from a feed
     // when they no longer exist in that feed.
@@ -16,20 +16,21 @@ function getIcalSyncConfig() {
     // Added as attendees on all synced events, unless overridden per feed.
     defaultAttendeeEmails: [
       "example1@yourcompany.com",
-      "example2@yourcompany.com"
+      "example2@yourcompany.com",
     ],
 
     // One mapping per ICS feed -> target Google Calendar
     feedMappings: [
       {
         name: "Cole Streeter",
-        feedUrl: "https://ssprodst.blob.core.windows.net/calendars/316/46131.ics",
+        feedUrl:
+          "https://ssprodst.blob.core.windows.net/calendars/316/46131.ics",
         calendarId: "REPLACE_WITH_COLE_CALENDAR_ID@group.calendar.google.com",
 
         // Optional per-feed attendee override.
         // If empty, defaultAttendeeEmails is used.
-        attendeeEmails: []
-      }
+        attendeeEmails: [],
+      },
 
       // Add more mappings, for example:
       // ,
@@ -39,6 +40,6 @@ function getIcalSyncConfig() {
       //   calendarId: "another_calendar_id@group.calendar.google.com",
       //   attendeeEmails: ["special-person@yourcompany.com"]
       // }
-    ]
+    ],
   };
 }
