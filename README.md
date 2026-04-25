@@ -16,3 +16,8 @@ The configurations for the files should live in `colorAttendeeConfig.gs` and `ge
 - [`ical-syncing/icalFeedSync.gs`](ical-syncing/icalFeedSync.gs): syncs events from one or more iCal feeds into specific Google Calendars, updates changed events, and adds configured attendees.
 - [`ical-syncing/icalFeedSync.config.example.gs`](ical-syncing/icalFeedSync.config.example.gs): example config file for feed mappings and attendee lists.
 - [`ical-syncing/README.md`](ical-syncing/README.md): setup, configuration, trigger setup, and behavior details.
+
+## ✅ Testing
+
+- Run tests locally with `npm test`.
+- Current suite: [`tests/icalFeedSync.test.js`](tests/icalFeedSync.test.js).

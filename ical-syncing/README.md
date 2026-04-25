@@ -72,3 +72,9 @@ function getIcalSyncConfig() {
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
 - Delete operations are guarded to only remove events that are verifiably managed by this script/feed.
 - On first `syncIcalFeeds()` run, the script logs all accessible calendar names/IDs once, to help with initial config.
+
+## Local tests
+
+- Run: `npm test`
+- Test file: `tests/icalFeedSync.test.js`
+- Tests run with Node's built-in test runner and mock Apps Script globals/services.
