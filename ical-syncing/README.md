@@ -30,7 +30,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 5. Edit `icalFeedSync.config.gs`:
    - Set `calendarId` for each feed mapping.
    - Optionally set per-feed `titlePrefix` (for example `[Sports]`).
-   - Set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`.
+   - Set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`. The target `calendarId` is also added as an attendee on the synced source event.
    - Optionally add `placeNameAddressMap` entries when event titles or locations contain venue names instead of full addresses.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
 6. In Apps Script editor:

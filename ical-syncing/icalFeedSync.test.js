@@ -662,7 +662,7 @@ test("reconcileDrivePlaceholder_ resolves summary-only venue names through place
     return 25;
   };
   ctx.Calendar.Events.insert = (resource, calendarId) => {
-    assert.equal(calendarId, "calendar-1");
+    assert.equal(calendarId, "b@example.com");
     inserted.push(resource);
     return {
       id: "drive-1",
@@ -689,7 +689,7 @@ test("reconcileDrivePlaceholder_ resolves summary-only venue names through place
   };
   const mapping = {
     feedUrl: "https://example.com/feed.ics",
-    calendarId: "calendar-1",
+    calendarId: "b@example.com",
   };
   const feedHash = "feedhash123";
   const sourceSyncKey = "feedhash123:abc";
@@ -911,7 +911,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   ctx.getDriveMinutes_ = () => 25;
 
   ctx.Calendar.Events.insert = (resource, calendarId) => {
-    assert.equal(calendarId, "calendar-1");
+    assert.equal(calendarId, "b@example.com");
     inserts.push(resource);
     if (resource.extendedProperties.private.managedKind === "source") {
       return {
@@ -946,7 +946,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   const mapping = {
     name: "Test Feed",
     feedUrl: "https://example.com/feed.ics",
-    calendarId: "calendar-1",
+    calendarId: "b@example.com",
     attendeeEmails: [],
     titlePrefix: "[Sports]",
     addDriveTimePlaceholders: true,
@@ -973,6 +973,15 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   assert.ok(source);
   assert.ok(drive);
   assert.equal(source.summary, "[Sports] Client Meeting");
+  assert.equal(
+    JSON.stringify(source.attendees),
+    JSON.stringify([
+      { email: "coach@example.com" },
+      { email: "parent@example.com" },
+      { email: "owner@example.com" },
+      { email: "b@example.com" },
+    ]),
+  );
   assert.equal(drive.summary, "Drive (25m) to [Sports] Client Meeting");
   assert.equal(
     drive.extendedProperties.private.sourceEventId,
@@ -1007,7 +1016,7 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   ctx.getDriveMinutes_ = () => 25;
 
   ctx.Calendar.Events.insert = (resource, calendarId) => {
-    assert.equal(calendarId, "calendar-1");
+    assert.equal(calendarId, "b@example.com");
     inserts.push(resource);
     const kind = resource.extendedProperties.private.managedKind;
     if (kind === "source") {
@@ -1051,7 +1060,7 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   const mapping = {
     name: "Sports Feed",
     feedUrl: "https://example.com/sports.ics",
-    calendarId: "calendar-1",
+    calendarId: "b@example.com",
     attendeeEmails: [],
     titlePrefix: "[Sports]",
     addDriveTimePlaceholders: true,
@@ -1087,6 +1096,15 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   assert.ok(arrival);
   assert.ok(drive);
   assert.equal(source.summary, "[Sports] Soccer Game");
+  assert.equal(
+    JSON.stringify(source.attendees),
+    JSON.stringify([
+      { email: "coach@example.com" },
+      { email: "parent@example.com" },
+      { email: "owner@example.com" },
+      { email: "b@example.com" },
+    ]),
+  );
   assert.equal(arrival.summary, "Advanced arrival for [Sports] Soccer Game");
   assert.equal(arrival.start.dateTime, "2099-05-01T15:00:00.000Z");
   assert.equal(arrival.end.dateTime, "2099-05-01T15:30:00.000Z");

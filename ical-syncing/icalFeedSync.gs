@@ -127,7 +127,7 @@ function syncOneFeed_(cfg, mapping, today) {
       ? mapping.attendeeEmails
       : cfg.defaultAttendeeEmails) || [],
   );
-  const sourceAttendees = buildSourceAttendees_(attendees);
+  const sourceAttendees = buildSourceAttendees_(attendees, mapping.calendarId);
   const driveOpts = buildDriveOptions_(cfg, mapping);
   const driveDurationCache = {};
   console.log('[FEED] Processing "' + feedName + '" -> ' + mapping.calendarId);
@@ -1087,11 +1087,13 @@ function buildPlaceNameAddressRules_(cfg, mapping) {
 }
 
 /**
- * Returns source-event attendees with the current user added, so synced events can be declined locally.
+ * Returns source-event attendees with the current user and any extra emails added.
  */
-function buildSourceAttendees_(attendees) {
+function buildSourceAttendees_(attendees, extraEmails) {
   const emails = uniqueEmails_(
-    (attendees || []).concat([getCurrentUserEmail_()]),
+    (attendees || [])
+      .concat([getCurrentUserEmail_()])
+      .concat(extraEmails || []),
   );
   return emails;
 }
