@@ -13,6 +13,13 @@ function getIcalSyncConfig() {
     // when they no longer exist in that feed.
     deleteMissingFromFeed: true,
 
+    // Drive-time placeholders (global defaults, can be overridden per feed)
+    addDriveTimePlaceholders: false,
+    defaultOriginAddress: "123 Main St, Brooklyn, NY 11201",
+    // Placeholder is created only when computed drive time is > this threshold.
+    minDriveMinutesToCreate: 10,
+    driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
+
     // Added as attendees on all synced events, unless overridden per feed.
     defaultAttendeeEmails: [
       "example1@yourcompany.com",
@@ -30,6 +37,11 @@ function getIcalSyncConfig() {
         // Optional per-feed attendee override.
         // If empty, defaultAttendeeEmails is used.
         attendeeEmails: [],
+
+        // Optional per-feed drive placeholder settings.
+        addDriveTimePlaceholders: true,
+        // Optional per-feed origin override. If empty, defaultOriginAddress is used.
+        originAddress: "",
       },
 
       // Add more mappings, for example:
