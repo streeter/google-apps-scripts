@@ -2,6 +2,9 @@
  * This script looks at past events that are named in specific ways (see, for example blockFromPersonalCalendar.gs),
  * and deletes them
  */
+const GENERATED_BY_REGEX =
+  /Generated with (https:\/\/)?github.com\/streeter\/google\-apps\-scripts/;
+
 function clearPastBlocks() {
   const anHourAgo = new Date(Date.now() - 1000 * 60 * 60);
   const startDate = new Date(Date.now() - 1000 * 60 * 60 * 24);
@@ -14,11 +17,7 @@ function clearPastBlocks() {
     .filter(
       (event) =>
         eventsToDelete.includes(event.getTitle()) &&
-        event
-          .getDescription()
-          .match(
-            /Generated with https:\/\/github.com\/streeter\/google\-apps\-scripts/,
-          ) !== null,
+        GENERATED_BY_REGEX.test(event.getDescription()),
     )
     .forEach((event) => {
       console.log(
