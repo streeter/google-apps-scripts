@@ -17,14 +17,14 @@ function clearPastBlocks() {
         event
           .getDescription()
           .match(
-            /Generated with https:\/\/github.com\/streeter\/google\-apps\-scripts/
-          ) !== null
+            /Generated with https:\/\/github.com\/streeter\/google\-apps\-scripts/,
+          ) !== null,
     )
     .forEach((event) => {
       console.log(
         `Deleting ${event.getStartTime().toLocaleString()}-${event
           .getEndTime()
-          .toLocaleString()} - ${event.getTitle()}`
+          .toLocaleString()} - ${event.getTitle()}`,
       );
       event.deleteEvent();
     });

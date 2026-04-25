@@ -78,5 +78,5 @@ function getIcalSyncConfig() {
 - Run: `npm test`
 - Lint formatting with: `npm run lint`
 - Auto-format with: `npm run format`
-- Test file: `tests/icalFeedSync.test.js`
+- Test file: `ical-syncing/icalFeedSync.test.js`
 - Tests run with Node's built-in test runner and mock Apps Script globals/services.

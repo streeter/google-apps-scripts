@@ -32,7 +32,7 @@ const blockFromPersonalCalendars = () => {
       const result = func.call(this, event);
       if (!result) {
         console.info(
-          `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because it's ${reason}`
+          `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because it's ${reason}`,
         );
       }
       return result;
@@ -50,13 +50,13 @@ const blockFromPersonalCalendars = () => {
     // Load moment.js to be able to do date operations
     eval(
       UrlFetchApp.fetch(
-        "https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"
-      ).getContentText()
+        "https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js",
+      ).getContentText(),
     );
     eval(
       UrlFetchApp.fetch(
-        "https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.41/moment-timezone-with-data.min.js"
-      ).getContentText()
+        "https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.41/moment-timezone-with-data.min.js",
+      ).getContentText(),
     );
 
     const timeZone = calendar.getTimeZone();
@@ -105,8 +105,10 @@ const blockFromPersonalCalendars = () => {
     }
     const richEvents = secondaryCalendar.getEvents(start, end);
     richEvents.forEach((event) => {
-      event.isAvailabilityFree = event.getTransparency() == 'TRANSPARENT';
-      console.log(`event ${event.getTitle()} is with transparency ${event.getTransparency()} is marked as ${event.isAvailabilityFree}`);
+      event.isAvailabilityFree = event.getTransparency() == "TRANSPARENT";
+      console.log(
+        `event ${event.getTitle()} is with transparency ${event.getTransparency()} is marked as ${event.isAvailabilityFree}`,
+      );
     });
     return richEvents;
   };
@@ -141,7 +143,7 @@ const blockFromPersonalCalendars = () => {
 
     const now = new Date();
     const endDate = new Date(
-      Date.now() + 1000 * 60 * 60 * 24 * CONFIG.daysToBlockInAdvance
+      Date.now() + 1000 * 60 * 60 * 24 * CONFIG.daysToBlockInAdvance,
     );
 
     const primaryCalendar = CalendarApp.getDefaultCalendar();
@@ -152,14 +154,14 @@ const blockFromPersonalCalendars = () => {
       ...primaryCalendar
         .getEvents(now, endDate)
         .filter((event) => event.getTag(copiedEventTag))
-        .map((event) => ({ [event.getTag(copiedEventTag)]: event }))
+        .map((event) => ({ [event.getTag(copiedEventTag)]: event })),
     );
 
     const knownOutOfOfficeDays = new Set(
       primaryCalendar
         .getEvents(now, endDate)
         .filter((event) => event.isAllDayEvent())
-        .map((event) => timeZoneAware.day(event))
+        .map((event) => timeZoneAware.day(event)),
     );
 
     const eventsInSecondaryCalendar = getRichEvents(calendarId, now, endDate);
@@ -171,7 +173,7 @@ const blockFromPersonalCalendars = () => {
             !knownEvents.hasOwnProperty(eventTagValue(event)) ||
             hasTimeChanges(event, knownEvents[eventTagValue(event)])
           );
-        })
+        }),
       )
       .filter(
         withLogging("invited work email", (event) => {
@@ -183,32 +185,33 @@ const blockFromPersonalCalendars = () => {
             }
           }
           return true;
-        })
+        }),
       )
       .filter(
         withLogging("outside of work hours", (event) =>
-          timeZoneAware.isInWorkHours(event)
-        )
+          timeZoneAware.isInWorkHours(event),
+        ),
       )
       .filter(
         withLogging(
           "during a weekend",
-          (event) => !CONFIG.skipWeekends || timeZoneAware.isInAWeekend(event)
-        )
+          (event) => !CONFIG.skipWeekends || timeZoneAware.isInAWeekend(event),
+        ),
       )
       .filter(
         withLogging(
           "during an OOO day",
           (event) =>
             !CONFIG.assumeAllDayEventsInWorkCalendarIsOOO ||
-            !knownOutOfOfficeDays.has(timeZoneAware.day(event))
-        )
+            !knownOutOfOfficeDays.has(timeZoneAware.day(event)),
+        ),
       )
       .filter(
         withLogging(
           'marked as "Free" availabilty or is full day',
-          (event) => !(event.isAvailabilityFree && CONFIG.skipFreeAvailabilityEvents)
-        )
+          (event) =>
+            !(event.isAvailabilityFree && CONFIG.skipFreeAvailabilityEvents),
+        ),
       )
       .filter((event) => {
         // Look for similar events
@@ -217,12 +220,12 @@ const blockFromPersonalCalendars = () => {
           event.getEndTime(),
           {
             search: event.getTitle(),
-          }
+          },
         );
         // Find events with the same time and titles on the primary calendar. If they exist, ignore this personal event.
         if (similarEvents.length > 0) {
           console.log(
-            `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because there is one or more similar events on the primary calendar`
+            `ℹ️ Skipping "${event.getTitle()}" (${event.getStartTime()}) because there is one or more similar events on the primary calendar`,
           );
           similarEvents.forEach((sevent) => {
             console.log(`  - similar event "${sevent.getTitle()}"`);
@@ -244,20 +247,20 @@ const blockFromPersonalCalendars = () => {
                 CalendarApp.GuestStatus.OWNER,
               ].indexOf(event.getMyStatus()) >= 0
             );
-          }
-        )
+          },
+        ),
       );
 
     filteredEventsInSecondaryCalendar.forEach((event) => {
       const knownEvent = knownEvents[eventTagValue(event)];
       if (knownEvent) {
         console.log(
-          `📝 Need to edit "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+          `📝 Need to edit "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`,
         );
         knownEvent.deleteEvent();
       } else {
         console.log(
-          `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`
+          `✅ Need to create "${event.getTitle()}" (${event.getStartTime()}) [${event.getId()}]`,
         );
       }
       const newEvent = primaryCalendar.createEvent(
@@ -267,7 +270,7 @@ const blockFromPersonalCalendars = () => {
         {
           description:
             "Generated with https://github.com/streeter/google-apps-scripts",
-        }
+        },
       );
 
       newEvent
@@ -282,16 +285,16 @@ const blockFromPersonalCalendars = () => {
 
     // For each secondary event, get the tag for it
     const tagsOnSecondaryCalendar = new Set(
-      eventsInSecondaryCalendar.map(eventTagValue)
+      eventsInSecondaryCalendar.map(eventTagValue),
     );
     // For each known event, if it has a copied event tag, but is not on the secondary calendar events, we should delete the block from the primary calendar.
     Object.values(knownEvents)
       .filter(
-        (event) => !tagsOnSecondaryCalendar.has(event.getTag(copiedEventTag))
+        (event) => !tagsOnSecondaryCalendar.has(event.getTag(copiedEventTag)),
       )
       .forEach((event) => {
         console.log(
-          `🗑️ Need to delete time block event ${event.getTitle()} on ${event.getStartTime()}, as it was removed from personal calendar`
+          `🗑️ Need to delete time block event ${event.getTitle()} on ${event.getStartTime()}, as it was removed from personal calendar`,
         );
         event.deleteEvent();
       });
@@ -303,7 +306,7 @@ const blockFromPersonalCalendars = () => {
           const knownEvent = knownEvents[eventTagValue(event)];
           if (knownEvent) {
             console.log(
-              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it was marked as not attending`
+              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it was marked as not attending`,
             );
             knownEvent.deleteEvent();
           }
@@ -316,7 +319,7 @@ const blockFromPersonalCalendars = () => {
           const knownEvent = knownEvents[eventTagValue(event)];
           if (knownEvent) {
             console.log(
-              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it has a free availability`
+              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it has a free availability`,
             );
             knownEvent.deleteEvent();
           }
@@ -327,7 +330,7 @@ const blockFromPersonalCalendars = () => {
 
 const calendarEventTag = (calendarId) => {
   const calendarHash = Utilities.base64Encode(
-    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, calendarId)
+    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, calendarId),
   );
   // This is undocumented, but keys fail if they are longer than 44 chars :)
   // The idea behind the SHA is to avoid collisions of the substring when you have similarly-named calendars
@@ -341,20 +344,20 @@ const calendarEventTag = (calendarId) => {
 const cleanUpAllCalendars = () => {
   const now = new Date();
   const endDate = new Date(
-    Date.now() + 1000 * 60 * 60 * 24 * CONFIG.daysToBlockInAdvance
+    Date.now() + 1000 * 60 * 60 * 24 * CONFIG.daysToBlockInAdvance,
   );
   const tagsOfEventsToDelete = new Set(
-    CONFIG.calendarIds.map(calendarEventTag)
+    CONFIG.calendarIds.map(calendarEventTag),
   );
 
   CalendarApp.getDefaultCalendar()
     .getEvents(now, endDate)
     .filter((event) =>
-      event.getAllTagKeys().some((tag) => tagsOfEventsToDelete.has(tag))
+      event.getAllTagKeys().some((tag) => tagsOfEventsToDelete.has(tag)),
     )
     .forEach((event) => {
       console.log(
-        `🗑️ Need to delete event on ${event.getStartTime()} as part of cleanup`
+        `🗑️ Need to delete event on ${event.getStartTime()} as part of cleanup`,
       );
       event.deleteEvent();
     });

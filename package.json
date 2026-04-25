@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "lint": "prettier --check \"README.md\" \"ical-syncing/**/*.{gs,md}\" \"tests/**/*.js\" \".github/workflows/**/*.yml\" \"package.json\"",
-    "format": "prettier --write \"README.md\" \"ical-syncing/**/*.{gs,md}\" \"tests/**/*.js\" \".github/workflows/**/*.yml\" \"package.json\"",
-    "test": "node --test"
+    "lint": "prettier --check \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
+    "format": "prettier --write \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
+    "test": "node --test \"**/*.test.js\""
   },
   "devDependencies": {
     "prettier": "^3.6.2"

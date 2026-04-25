@@ -6,7 +6,7 @@
 // in that timeslot (this doubles as an idempotency mechanism since this script runs
 // repeatedly).
 //
-// To use it, create a new script at https://script.google.com/ on your Stripe account
+// To use it, create a new script at https://script.google.com/ on your work account
 // and click "+" in Services menu, then add the Google Calendar API v3. Paste in this
 // script to the code editor and set up a time-based trigger in the Triggers tab.
 //
@@ -38,7 +38,7 @@ const isInterviewEvent = (event) => {
 const hasSpaceForBlockAfter = (cal, eventEnds, timeBlockEnds) => {
   const existingEvents = cal.getEvents(eventEnds, timeBlockEnds);
   const existingNotAllDayEvents = existingEvents.filter(
-    (evt) => !evt.isAllDayEvent()
+    (evt) => !evt.isAllDayEvent(),
   );
   return existingNotAllDayEvents.length === 0; // Don't schedule if there's something there already
 };
@@ -62,7 +62,7 @@ const interviewInOriginalSpot = (cal, event, interviewId) => {
   const interview = cal.getEventById(interviewId);
   if (!interview) {
     console.log(
-      `Couldn't find event with ID ${interivewId}; assuming event still exists to be safe`
+      `Couldn't find event with ID ${interviewId}; assuming event still exists to be safe`,
     );
     return true; // fail closed if we can't find the interview event tagged on the scorecard block
   }
@@ -121,7 +121,7 @@ function scheduleInterviewFeedback() {
 
     const eventEnds = event.getEndTime();
     const timeBlockEnds = new Date(
-      eventEnds.getTime() + TIME_BLOCK_MINS * 60000
+      eventEnds.getTime() + TIME_BLOCK_MINS * 60000,
     );
 
     if (isInterviewEvent(event)) {
@@ -136,7 +136,7 @@ function scheduleInterviewFeedback() {
             location: location,
             description:
               "Generated with https://github.com/streeter/google-apps-scripts",
-          }
+          },
         );
         createdEvent
           .setTag(SCORECARD_TAG, event.getId())
@@ -144,7 +144,7 @@ function scheduleInterviewFeedback() {
           .removeAllReminders(); // Avoid double notifications
       } else {
         console.log(
-          `Not scheduling feedback block for ${event.getTitle()} because there's already something there`
+          `Not scheduling feedback block for ${event.getTitle()} because there's already something there`,
         );
       }
     }
