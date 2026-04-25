@@ -16,6 +16,11 @@ function getIcalSyncConfig() {
     // Drive-time placeholders (global defaults, can be overridden per feed)
     addDriveTimePlaceholders: false,
     defaultOriginAddress: "123 Main St, Brooklyn, NY 11201",
+    // Optional place-name -> address mappings used to resolve venue names
+    // into routable addresses before looking up drive time.
+    placeNameAddressMap: {
+      "McMoran Park": "1234 McMoran Park Rd, Your City, ST 12345",
+    },
     // Placeholder is created only when computed drive time is > this threshold.
     minDriveMinutesToCreate: 10,
     driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
@@ -46,6 +51,12 @@ function getIcalSyncConfig() {
         addDriveTimePlaceholders: true,
         // Optional per-feed origin override. If empty, defaultOriginAddress is used.
         originAddress: "",
+
+        // Optional per-feed place-name overrides. These are merged on top of the
+        // global placeNameAddressMap and take precedence when keys overlap.
+        placeNameAddressMap: {
+          "McMoran Park": "1234 McMoran Park Rd, Your City, ST 12345",
+        },
       },
 
       // Add more mappings, for example:

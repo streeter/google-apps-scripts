@@ -321,6 +321,101 @@ test("extractDriveMinutesFromDirections_ rounds up to nearest 15 minutes", () =>
   assert.equal(ctx.roundUpMinutesToNearestFifteen_(23), 30);
 });
 
+test("getDriveMinutes_ logs route diagnostics when directions are incomplete", () => {
+  const ctx = loadIcalSyncContext();
+  const warnings = [];
+  const errors = [];
+  ctx.console.warn = (msg) => warnings.push(String(msg));
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.Maps.newDirectionFinder = () => ({
+    setOrigin() {
+      return this;
+    },
+    setDestination() {
+      return this;
+    },
+    setMode() {
+      return this;
+    },
+    getDirections() {
+      return {
+        status: "OK",
+        geocoded_waypoints: [
+          { geocoder_status: "OK", partial_match: true, place_id: "abc" },
+        ],
+        routes: [{ legs: [{}] }],
+      };
+    },
+  });
+
+  const minutes = ctx.getDriveMinutes_("Origin", "Destination", {});
+
+  assert.equal(minutes, null);
+  assert.ok(
+    warnings.some((msg) => msg.includes("returned no usable duration")),
+    warnings.join("\n"),
+  );
+  assert.equal(errors.length, 0);
+});
+
+test("logDirectionsDiagnostics_ logs waypoint and status details", () => {
+  const ctx = loadIcalSyncContext();
+  const warnings = [];
+  const infos = [];
+  ctx.console.warn = (msg) => warnings.push(String(msg));
+  ctx.console.info = (msg) => infos.push(String(msg));
+
+  ctx.logDirectionsDiagnostics_("Origin", "Destination", {
+    status: "NOT_FOUND",
+    geocoded_waypoints: [
+      { geocoder_status: "ZERO_RESULTS", partial_match: true, place_id: "abc" },
+    ],
+    routes: [],
+  });
+
+  assert.ok(
+    warnings.some((msg) => msg.includes("Directions status")),
+    warnings.join("\n"),
+  );
+  assert.ok(
+    infos.some((msg) => msg.includes("waypoint 0")),
+    infos.join("\n"),
+  );
+  assert.ok(
+    warnings.some((msg) => msg.includes("returned no routes")),
+    warnings.join("\n"),
+  );
+});
+
+test("getDriveMinutes_ logs exception details on lookup failure", () => {
+  const ctx = loadIcalSyncContext();
+  const errors = [];
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.Maps.newDirectionFinder = () => ({
+    setOrigin() {
+      return this;
+    },
+    setDestination() {
+      return this;
+    },
+    setMode() {
+      return this;
+    },
+    getDirections() {
+      const err = new Error("quota exceeded");
+      err.name = "QuotaError";
+      throw err;
+    },
+  });
+
+  const minutes = ctx.getDriveMinutes_("Origin", "Destination", {});
+
+  assert.equal(minutes, null);
+  assert.ok(errors.length > 0);
+  assert.match(errors[0], /QuotaError/);
+  assert.match(errors[0], /quota exceeded/);
+});
+
 test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () => {
   const ctx = loadIcalSyncContext();
   assert.equal(
@@ -341,6 +436,7 @@ test("resolveDrivePlan_ prefers previous event location and skips short/no-op dr
   const driveOpts = {
     originAddress: "123 Main St, Brooklyn, NY",
     minDriveMinutesToCreate: 10,
+    placeNameAddressRules: [],
   };
   const driveEnd = new Date("2099-05-01T15:00:00Z");
 
@@ -396,6 +492,7 @@ test("resolveDrivePlan_ falls back to default origin when previous route lookup 
   const driveOpts = {
     originAddress: "123 Main St, Brooklyn, NY",
     minDriveMinutesToCreate: 10,
+    placeNameAddressRules: [],
   };
   const driveEnd = new Date("2099-05-01T15:00:00Z");
 
@@ -424,6 +521,7 @@ test("resolveDrivePlan_ marks routeLookupFailed when drive cannot be computed", 
   const driveOpts = {
     originAddress: "123 Main St, Brooklyn, NY",
     minDriveMinutesToCreate: 10,
+    placeNameAddressRules: [],
   };
   const driveEnd = new Date("2099-05-01T15:00:00Z");
 
@@ -443,6 +541,163 @@ test("resolveDrivePlan_ marks routeLookupFailed when drive cannot be computed", 
   assert.match(plan.skipReason, /route lookup failed/i);
   assert.equal(Array.isArray(plan.lookupFailures), true);
   assert.equal(plan.lookupFailures.length, 1);
+});
+
+test("resolvePlaceNameAddress_ maps venue names to canonical addresses", () => {
+  const ctx = loadIcalSyncContext();
+  const rules = [
+    {
+      placeName: "McMoran Park",
+      placeNameLower: "mcmoran park",
+      address: "1000 Park Ave, City, ST",
+    },
+    {
+      placeName: "McMoran",
+      placeNameLower: "mcmoran",
+      address: "2000 Park Ave, City, ST",
+    },
+  ];
+
+  const mapped = ctx.resolvePlaceNameAddress_(
+    "McMoran Park Field 1 (60)",
+    rules,
+  );
+  assert.equal(mapped.matched, true);
+  assert.equal(mapped.matchedPlaceName, "McMoran Park");
+  assert.equal(mapped.text, "1000 Park Ave, City, ST");
+
+  const caseInsensitive = ctx.resolvePlaceNameAddress_(
+    "mcmoran park field 2",
+    rules,
+  );
+  assert.equal(caseInsensitive.matched, true);
+  assert.equal(caseInsensitive.text, "1000 Park Ave, City, ST");
+
+  const untouched = ctx.resolvePlaceNameAddress_("Some Other Venue", rules);
+  assert.equal(untouched.matched, false);
+  assert.equal(untouched.text, "Some Other Venue");
+});
+
+test("resolveDrivePlan_ applies place-name mappings before route lookup", () => {
+  const ctx = loadIcalSyncContext();
+  const captured = [];
+  const driveOpts = {
+    originAddress: "Brooklyn, NY",
+    minDriveMinutesToCreate: 10,
+    placeNameAddressRules: [
+      {
+        placeName: "McMoran Park",
+        placeNameLower: "mcmoran park",
+        address: "1000 Park Ave, City, ST",
+      },
+    ],
+  };
+  const driveEnd = new Date("2099-05-01T15:00:00Z");
+
+  ctx.findPreviousDriveOriginEvent_ = () => ({
+    id: "prev-1",
+    summary: "Lunch",
+    location: "North Lot",
+  });
+  ctx.getDriveMinutes_ = (origin, destination) => {
+    captured.push([origin, destination]);
+    return 25;
+  };
+
+  const plan = ctx.resolveDrivePlan_(
+    "calendar-1",
+    "source-1",
+    driveEnd,
+    "McMoran Park Field 1 (60)",
+    driveOpts,
+    {},
+  );
+
+  assert.equal(plan.originAddress, "North Lot");
+  assert.equal(plan.driveMinutes, 25);
+  assert.deepEqual(captured, [["North Lot", "1000 Park Ave, City, ST"]]);
+});
+
+test("reconcileDrivePlaceholder_ resolves summary-only venue names through place mappings", () => {
+  const ctx = loadIcalSyncContext();
+  const inserted = [];
+  const captured = [];
+  ctx.findPreviousDriveOriginEvent_ = () => null;
+  ctx.getDriveMinutes_ = (origin, destination) => {
+    captured.push([origin, destination]);
+    return 25;
+  };
+  ctx.Calendar.Events.insert = (resource, calendarId) => {
+    assert.equal(calendarId, "calendar-1");
+    inserted.push(resource);
+    return {
+      id: "drive-1",
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {};
+
+  const evt = {
+    uid: "uid-1",
+    summary: "McMoran Park Field 1 (60)",
+    location: "",
+    start: { type: "dateTime", dateTime: "2099-05-01T15:00:00Z" },
+    end: { type: "dateTime", dateTime: "2099-05-01T16:00:00Z" },
+  };
+  const syncedEvent = {
+    id: "source-1",
+    start: { dateTime: "2099-05-01T15:00:00Z" },
+  };
+  const mapping = {
+    feedUrl: "https://example.com/feed.ics",
+    calendarId: "calendar-1",
+  };
+  const feedHash = "feedhash123";
+  const sourceSyncKey = "feedhash123:abc";
+  const driveSyncKey = ctx.buildDriveSyncKey_(sourceSyncKey);
+  const driveOpts = {
+    enabled: true,
+    originAddress: "Brooklyn, NY",
+    placeNameAddressRules: [
+      {
+        placeName: "McMoran Park",
+        placeNameLower: "mcmoran park",
+        address: "1000 Park Ave, City, ST",
+      },
+    ],
+    minDriveMinutesToCreate: 10,
+    titleTemplate: "Drive to {{title}}",
+  };
+  const existingDriveByKey = {};
+  const seenDrive = {};
+  const today = new Date("2026-01-01T00:00:00Z");
+
+  ctx.reconcileDrivePlaceholder_(
+    evt,
+    syncedEvent,
+    mapping,
+    feedHash,
+    sourceSyncKey,
+    driveSyncKey,
+    driveOpts,
+    existingDriveByKey,
+    seenDrive,
+    today,
+    baseStats(),
+    {},
+    null,
+    [],
+  );
+
+  assert.equal(inserted.length, 1);
+  assert.deepEqual(captured, [["Brooklyn, NY", "1000 Park Ave, City, ST"]]);
+  assert.equal(inserted[0].location, "");
+  assert.equal(inserted[0].summary, "Drive to McMoran Park Field 1 (60)");
 });
 
 test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > threshold", () => {

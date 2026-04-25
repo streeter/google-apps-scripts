@@ -31,6 +31,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
    - Set `calendarId` for each feed mapping.
    - Optionally set per-feed `titlePrefix` (for example `[Sports]`).
    - Set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`.
+   - Optionally add `placeNameAddressMap` entries when event titles or locations contain venue names instead of full addresses.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
 6. In Apps Script editor:
    - Open **Services**.
@@ -50,6 +51,9 @@ function getIcalSyncConfig() {
     deleteMissingFromFeed: true,
     addDriveTimePlaceholders: false,
     defaultOriginAddress: "123 Main St, Brooklyn, NY 11201",
+    placeNameAddressMap: {
+      "McMoran Park": "1234 McMoran Park Rd, Your City, ST 12345",
+    },
     minDriveMinutesToCreate: 10,
     driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
     defaultAttendeeEmails: ["person@company.com"],
@@ -62,6 +66,9 @@ function getIcalSyncConfig() {
         attendeeEmails: [],
         addDriveTimePlaceholders: true,
         originAddress: "",
+        placeNameAddressMap: {
+          "McMoran Park": "1234 McMoran Park Rd, Your City, ST 12345",
+        },
       },
     ],
   };
@@ -74,6 +81,7 @@ function getIcalSyncConfig() {
 
 - `feedMappings` can include many feed -> calendar routes.
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
+- `placeNameAddressMap` lets you translate venue names in titles or locations into routable addresses before drive lookup.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when non-empty.
 - Per-feed `addDriveTimePlaceholders` controls whether drive placeholders are managed for that feed.
 - Placeholders are only created when computed drive time is strictly greater than `minDriveMinutesToCreate` (default `10`).

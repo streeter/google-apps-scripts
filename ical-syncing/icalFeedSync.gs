@@ -507,6 +507,13 @@ function getIcalSyncConfig_() {
   if (typeof cfg.defaultOriginAddress !== "string")
     cfg.defaultOriginAddress = "";
   if (
+    !cfg.placeNameAddressMap ||
+    typeof cfg.placeNameAddressMap !== "object" ||
+    Array.isArray(cfg.placeNameAddressMap)
+  ) {
+    cfg.placeNameAddressMap = {};
+  }
+  if (
     typeof cfg.minDriveMinutesToCreate !== "number" ||
     isNaN(cfg.minDriveMinutesToCreate)
   ) {
@@ -532,6 +539,13 @@ function getIcalSyncConfig_() {
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
     if (typeof m.originAddress !== "string") m.originAddress = "";
+    if (
+      !m.placeNameAddressMap ||
+      typeof m.placeNameAddressMap !== "object" ||
+      Array.isArray(m.placeNameAddressMap)
+    ) {
+      m.placeNameAddressMap = {};
+    }
   });
 
   return cfg;
@@ -1006,9 +1020,37 @@ function buildDriveOptions_(cfg, mapping) {
       cfg.defaultOriginAddress ||
       ""
     ).trim(),
+    placeNameAddressRules: buildPlaceNameAddressRules_(cfg, mapping),
     minDriveMinutesToCreate: cfg.minDriveMinutesToCreate,
     titleTemplate: cfg.driveEventTitleTemplate,
   };
+}
+
+/**
+ * Builds normalized place-name replacement rules from global and per-feed config.
+ */
+function buildPlaceNameAddressRules_(cfg, mapping) {
+  const merged = Object.assign(
+    {},
+    cfg.placeNameAddressMap || {},
+    mapping.placeNameAddressMap || {},
+  );
+  return Object.keys(merged)
+    .map(function (name) {
+      return {
+        placeName: String(name || "").trim(),
+        placeNameLower: String(name || "")
+          .trim()
+          .toLowerCase(),
+        address: String(merged[name] || "").trim(),
+      };
+    })
+    .filter(function (rule) {
+      return !!rule.placeName && !!rule.address;
+    })
+    .sort(function (a, b) {
+      return b.placeName.length - a.placeName.length;
+    });
 }
 
 /**
@@ -1260,8 +1302,40 @@ function reconcileDrivePlaceholder_(
   arrivalAnchorStart,
   attendees,
 ) {
-  const destination = (evt.location || "").trim();
+  const destinationCandidate = resolveDriveDestinationCandidate_(evt);
   const sourceTitle = evt.summary || "(No title)";
+  if (!destinationCandidate.text) {
+    stats.driveSkipped++;
+    console.info(
+      '[SKIP] Drive placeholder ignored because "' +
+        sourceTitle +
+        '" has no usable location or place-name mapping',
+    );
+    maybeDeleteDrivePlaceholder_(
+      mapping,
+      feedHash,
+      driveSyncKey,
+      existingDriveByKey,
+      today,
+      stats,
+      "source event has no location",
+    );
+    return;
+  }
+  if (destinationCandidate.source === "summary") {
+    console.info(
+      '[INFO] Using event summary as drive destination candidate for "' +
+        sourceTitle +
+        '"',
+    );
+  } else {
+    console.info(
+      '[INFO] Using event location as drive destination candidate for "' +
+        sourceTitle +
+        '"',
+    );
+  }
+  const destination = destinationCandidate.text;
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
 
   if (!driveOpts.enabled) {
@@ -1303,25 +1377,6 @@ function reconcileDrivePlaceholder_(
       today,
       stats,
       "source event is all-day",
-    );
-    return;
-  }
-
-  if (!destination) {
-    stats.driveSkipped++;
-    console.info(
-      '[SKIP] Drive placeholder ignored because "' +
-        sourceTitle +
-        '" has no location',
-    );
-    maybeDeleteDrivePlaceholder_(
-      mapping,
-      feedHash,
-      driveSyncKey,
-      existingDriveByKey,
-      today,
-      stats,
-      "source event has no location",
     );
     return;
   }
@@ -1657,14 +1712,45 @@ function resolveDrivePlan_(
   driveDurationCache,
 ) {
   const lookupFailures = [];
+  const destinationResolution = resolvePlaceNameAddress_(
+    String(destination || "").trim(),
+    driveOpts.placeNameAddressRules,
+  );
+  if (destinationResolution.matched) {
+    console.info(
+      '[INFO] Resolved place name "' +
+        destinationResolution.matchedPlaceName +
+        '" to "' +
+        destinationResolution.text +
+        '" for destination "' +
+        destinationResolution.sourceText +
+        '"',
+    );
+  }
+  const resolvedDestination = destinationResolution.text;
   const previousEvent = findPreviousDriveOriginEvent_(
     calendarId,
     driveEnd,
     sourceEventId,
   );
   if (previousEvent && previousEvent.location) {
-    const previousLocation = String(previousEvent.location || "").trim();
-    if (sameLocation_(previousLocation, destination)) {
+    const previousLocationResolution = resolvePlaceNameAddress_(
+      String(previousEvent.location || "").trim(),
+      driveOpts.placeNameAddressRules,
+    );
+    if (previousLocationResolution.matched) {
+      console.info(
+        '[INFO] Resolved place name "' +
+          previousLocationResolution.matchedPlaceName +
+          '" to "' +
+          previousLocationResolution.text +
+          '" for previous event "' +
+          (previousEvent.summary || previousEvent.id || "(No title)") +
+          '"',
+      );
+    }
+    const previousLocation = previousLocationResolution.text;
+    if (sameLocation_(previousLocation, resolvedDestination)) {
       return {
         skipReason:
           "previous event is already at destination (" + previousLocation + ")",
@@ -1672,7 +1758,7 @@ function resolveDrivePlan_(
     }
     const previousDriveMinutes = getDriveMinutes_(
       previousLocation,
-      destination,
+      resolvedDestination,
       driveDurationCache,
     );
     if (previousDriveMinutes !== null) {
@@ -1692,13 +1778,18 @@ function resolveDrivePlan_(
         previousEventId: previousEvent.id || "",
       };
     }
-    lookupFailures.push(previousLocation + " -> " + destination);
+    lookupFailures.push(previousLocation + " -> " + resolvedDestination);
     console.info(
       "[INFO] Drive lookup from previous event location failed; falling back to configured origin",
     );
   }
 
-  if (!driveOpts.originAddress) {
+  const originResolution = resolvePlaceNameAddress_(
+    String(driveOpts.originAddress || "").trim(),
+    driveOpts.placeNameAddressRules,
+  );
+  const resolvedOrigin = originResolution.text;
+  if (!resolvedOrigin) {
     if (lookupFailures.length) {
       return {
         skipReason:
@@ -1710,12 +1801,12 @@ function resolveDrivePlan_(
     return { skipReason: "no default origin address is configured" };
   }
   const driveMinutes = getDriveMinutes_(
-    driveOpts.originAddress,
-    destination,
+    resolvedOrigin,
+    resolvedDestination,
     driveDurationCache,
   );
   if (driveMinutes === null) {
-    lookupFailures.push(driveOpts.originAddress + " -> " + destination);
+    lookupFailures.push(resolvedOrigin + " -> " + resolvedDestination);
     return {
       skipReason: "route lookup failed",
       routeLookupFailed: true,
@@ -1733,10 +1824,46 @@ function resolveDrivePlan_(
     };
   }
   return {
-    originAddress: driveOpts.originAddress,
+    originAddress: resolvedOrigin,
     driveMinutes: driveMinutes,
     previousEventId: "",
   };
+}
+
+/**
+ * Picks the best raw destination text for a drive lookup, favoring location then summary.
+ */
+function resolveDriveDestinationCandidate_(evt) {
+  const location = String((evt && evt.location) || "").trim();
+  if (location) return { text: location, source: "location" };
+  const summary = String((evt && evt.summary) || "").trim();
+  if (summary) return { text: summary, source: "summary" };
+  return { text: "", source: "" };
+}
+
+/**
+ * Replaces configured place-name substrings with canonical addresses when they match.
+ */
+function resolvePlaceNameAddress_(text, rules) {
+  const sourceText = String(text || "").trim();
+  if (!sourceText || !rules || !rules.length) {
+    return { text: sourceText, matched: false };
+  }
+
+  const sourceLower = sourceText.toLowerCase();
+  for (let i = 0; i < rules.length; i++) {
+    const rule = rules[i];
+    if (!rule.placeNameLower) continue;
+    if (sourceLower.indexOf(rule.placeNameLower) < 0) continue;
+    return {
+      text: rule.address,
+      matched: true,
+      matchedPlaceName: rule.placeName,
+      sourceText: sourceText,
+    };
+  }
+
+  return { text: sourceText, matched: false };
 }
 
 /**
@@ -1823,7 +1950,16 @@ function isManagedPlaceholderEvent_(ev) {
  */
 function getDriveMinutes_(originAddress, destinationAddress, cache) {
   const key = (originAddress + "||" + destinationAddress).toLowerCase();
-  if (cache.hasOwnProperty(key)) return cache[key];
+  if (cache.hasOwnProperty(key)) {
+    console.info(
+      '[INFO] Using cached drive time for "' +
+        originAddress +
+        '" -> "' +
+        destinationAddress +
+        '"',
+    );
+    return cache[key];
+  }
 
   try {
     const directions = Maps.newDirectionFinder()
@@ -1831,17 +1967,23 @@ function getDriveMinutes_(originAddress, destinationAddress, cache) {
       .setDestination(destinationAddress)
       .setMode(Maps.DirectionFinder.Mode.DRIVING)
       .getDirections();
+    logDirectionsDiagnostics_(originAddress, destinationAddress, directions);
     const minutes = extractDriveMinutesFromDirections_(directions);
     cache[key] = minutes;
     return minutes;
   } catch (e) {
+    const errName = e && e.name ? e.name : "Error";
+    const errMessage = e && e.message ? e.message : String(e);
     console.error(
       '[ERROR] Drive lookup failed from "' +
         originAddress +
         '" to "' +
         destinationAddress +
         '": ' +
-        String(e),
+        errName +
+        ": " +
+        errMessage +
+        (e && e.stack ? "\n" + e.stack : ""),
     );
     cache[key] = null;
     return null;
@@ -1859,6 +2001,94 @@ function extractDriveMinutesFromDirections_(directions) {
   if (!duration || typeof duration.value !== "number") return null;
   const minutes = Math.ceil(duration.value / 60);
   return roundUpMinutesToNearestFifteen_(minutes);
+}
+
+/**
+ * Logs response-level diagnostics for a Maps directions lookup.
+ */
+function logDirectionsDiagnostics_(
+  originAddress,
+  destinationAddress,
+  directions,
+) {
+  if (!directions || typeof directions !== "object") {
+    console.warn(
+      '[WARN] Directions lookup returned no response for "' +
+        originAddress +
+        '" -> "' +
+        destinationAddress +
+        '"',
+    );
+    return;
+  }
+
+  if (directions.status && directions.status !== "OK") {
+    console.warn(
+      '[WARN] Directions status for "' +
+        originAddress +
+        '" -> "' +
+        destinationAddress +
+        '": ' +
+        directions.status,
+    );
+  }
+
+  const waypoints = directions.geocoded_waypoints || [];
+  waypoints.forEach(function (wp, idx) {
+    if (!wp) return;
+    const pieces = [];
+    if (wp.geocoder_status)
+      pieces.push("geocoder_status=" + wp.geocoder_status);
+    if (wp.partial_match) pieces.push("partial_match=true");
+    if (wp.place_id) pieces.push("place_id=" + wp.place_id);
+    if (pieces.length) {
+      console.info(
+        "[INFO] Directions waypoint " +
+          idx +
+          ' for "' +
+          originAddress +
+          '" -> "' +
+          destinationAddress +
+          '": ' +
+          pieces.join(", "),
+      );
+    }
+  });
+
+  const routes = directions.routes || [];
+  if (!routes.length) {
+    console.warn(
+      '[WARN] Directions lookup for "' +
+        originAddress +
+        '" -> "' +
+        destinationAddress +
+        '" returned no routes',
+    );
+    return;
+  }
+
+  const legs = routes[0].legs || [];
+  if (!legs.length) {
+    console.warn(
+      '[WARN] Directions lookup for "' +
+        originAddress +
+        '" -> "' +
+        destinationAddress +
+        '" returned no legs on first route',
+    );
+    return;
+  }
+
+  const duration = legs[0] && legs[0].duration ? legs[0].duration : null;
+  if (!duration || typeof duration.value !== "number") {
+    console.warn(
+      '[WARN] Directions lookup for "' +
+        originAddress +
+        '" -> "' +
+        destinationAddress +
+        '" returned no usable duration on first leg',
+    );
+  }
 }
 
 /**
