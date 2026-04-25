@@ -835,6 +835,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
     "feedhash123:source-sync",
     "drive:feedhash123:source-sync",
     "source-event-123",
+    "Practice",
     "Drive to Meeting",
     driveStart,
     driveEnd,
@@ -848,6 +849,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
   assert.equal(p.sourceSyncKey, "feedhash123:source-sync");
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.syncKey, "drive:feedhash123:source-sync");
+  assert.match(resource.description, /Source event: Practice/);
   assert.equal(
     JSON.stringify(resource.attendees),
     JSON.stringify([{ email: "a@example.com" }, { email: "b@example.com" }]),
@@ -865,6 +867,7 @@ test("arrival placeholder resource carries source linkage metadata", () => {
     "feedhash123:source-sync",
     "arrival:feedhash123:source-sync",
     "source-event-123",
+    "Practice",
     "Advanced arrival for Practice",
     arrivalStart,
     arrivalEnd,
@@ -879,6 +882,7 @@ test("arrival placeholder resource carries source linkage metadata", () => {
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.arrivalMinutes, "30");
   assert.equal(p.syncKey, "arrival:feedhash123:source-sync");
+  assert.match(resource.description, /Source event: Practice/);
   assert.equal(
     JSON.stringify(resource.attendees),
     JSON.stringify([{ email: "a@example.com" }, { email: "b@example.com" }]),

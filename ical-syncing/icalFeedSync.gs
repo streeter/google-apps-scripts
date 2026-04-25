@@ -1234,6 +1234,7 @@ function reconcileArrivalPlaceholder_(
   const arrivalHash = computeArrivalPlaceholderHash_(
     sourceSyncKey,
     syncedEvent.id,
+    evt.summary || "(No title)",
     arrivalStart,
     arrivalEnd,
     arrivalTitle,
@@ -1246,6 +1247,7 @@ function reconcileArrivalPlaceholder_(
     sourceSyncKey,
     arrivalSyncKey,
     syncedEvent.id,
+    evt.summary || "(No title)",
     arrivalTitle,
     arrivalStart,
     arrivalEnd,
@@ -1499,6 +1501,7 @@ function reconcileDrivePlaceholder_(
   const driveHash = computeDrivePlaceholderHash_(
     sourceSyncKey,
     syncedEvent.id,
+    evt.summary || "(No title)",
     driveOrigin,
     destination,
     driveStart,
@@ -1512,6 +1515,7 @@ function reconcileDrivePlaceholder_(
     sourceSyncKey,
     driveSyncKey,
     syncedEvent.id,
+    evt.summary || "(No title)",
     driveTitle,
     driveStart,
     driveEnd,
@@ -2189,6 +2193,7 @@ function buildDrivePlaceholderResource_(
   sourceSyncKey,
   driveSyncKey,
   sourceEventId,
+  sourceEventTitle,
   driveTitle,
   driveStart,
   driveEnd,
@@ -2206,7 +2211,7 @@ function buildDrivePlaceholderResource_(
     (evt.location || "") +
     "\n" +
     "Source event: " +
-    sourceEventId +
+    (sourceEventTitle || sourceEventId) +
     (driveOriginEventId ? "\nDrive origin event: " + driveOriginEventId : "");
 
   return {
@@ -2248,6 +2253,7 @@ function buildArrivalPlaceholderResource_(
   sourceSyncKey,
   arrivalSyncKey,
   sourceEventId,
+  sourceEventTitle,
   arrivalTitle,
   arrivalStart,
   arrivalEnd,
@@ -2261,7 +2267,7 @@ function buildArrivalPlaceholderResource_(
     arrivalMinutes +
     " minutes\n" +
     "Source event: " +
-    sourceEventId;
+    (sourceEventTitle || sourceEventId);
 
   return {
     summary: arrivalTitle,
@@ -2298,6 +2304,7 @@ function buildArrivalPlaceholderResource_(
 function computeDrivePlaceholderHash_(
   sourceSyncKey,
   sourceEventId,
+  sourceEventTitle,
   originAddress,
   destinationAddress,
   driveStart,
@@ -2308,6 +2315,7 @@ function computeDrivePlaceholderHash_(
     JSON.stringify({
       sourceSyncKey: sourceSyncKey,
       sourceEventId: sourceEventId,
+      sourceEventTitle: sourceEventTitle,
       originAddress: originAddress,
       destinationAddress: destinationAddress,
       driveStart: driveStart.toISOString(),
@@ -2323,6 +2331,7 @@ function computeDrivePlaceholderHash_(
 function computeArrivalPlaceholderHash_(
   sourceSyncKey,
   sourceEventId,
+  sourceEventTitle,
   arrivalStart,
   arrivalEnd,
   arrivalTitle,
@@ -2332,6 +2341,7 @@ function computeArrivalPlaceholderHash_(
     JSON.stringify({
       sourceSyncKey: sourceSyncKey,
       sourceEventId: sourceEventId,
+      sourceEventTitle: sourceEventTitle,
       arrivalStart: arrivalStart.toISOString(),
       arrivalEnd: arrivalEnd.toISOString(),
       arrivalTitle: arrivalTitle,
