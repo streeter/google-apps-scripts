@@ -5,7 +5,7 @@
   "scripts": {
     "lint": "prettier --check \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
     "format": "prettier --write \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
-    "test": "node --test \"**/*.test.js\""
+    "test": "node --test"
   },
   "devDependencies": {
     "prettier": "^3.6.2"
