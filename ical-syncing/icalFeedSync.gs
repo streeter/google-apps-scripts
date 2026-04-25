@@ -1,0 +1,557 @@
+/**
+ * iCal -> Google Calendar sync (future events), with update + attendee injection.
+ *
+ * This script expects a separate config file that defines:
+ *   function getIcalSyncConfig() { return { ... }; }
+ *
+ * Example file: icalFeedSync.config.example.gs
+ *
+ * Required setup in Apps Script:
+ * 1) Add Advanced Google Service: Calendar API
+ * 2) Add icalFeedSync.config.gs with getIcalSyncConfig()
+ * 3) Run setupIcalFeedSyncTrigger() once
+ */
+
+function setupIcalFeedSyncTrigger() {
+  const cfg = getIcalSyncConfig_();
+  const fn = "syncIcalFeeds";
+  ScriptApp.getProjectTriggers()
+    .filter(function(t) {
+      return t.getHandlerFunction() === fn;
+    })
+    .forEach(function(t) {
+      ScriptApp.deleteTrigger(t);
+    });
+
+  ScriptApp.newTrigger(fn)
+    .timeBased()
+    .everyMinutes(cfg.triggerEveryMinutes)
+    .create();
+}
+
+function syncIcalFeeds() {
+  const cfg = getIcalSyncConfig_();
+  const now = new Date();
+  const results = [];
+
+  cfg.feedMappings.forEach(function(mapping) {
+    try {
+      results.push(syncOneFeed_(cfg, mapping, now));
+    } catch (e) {
+      results.push({
+        feed: mapping.name || mapping.feedUrl,
+        error: String(e)
+      });
+    }
+  });
+
+  Logger.log(JSON.stringify(results, null, 2));
+}
+
+function syncOneFeed_(cfg, mapping, now) {
+  const feedHash = sha256Hex_(mapping.feedUrl).slice(0, 16);
+  const attendees = uniqueEmails_(
+    (mapping.attendeeEmails && mapping.attendeeEmails.length
+      ? mapping.attendeeEmails
+      : cfg.defaultAttendeeEmails) || []
+  );
+
+  const icsText = fetchIcs_(mapping.feedUrl);
+  const parsed = parseIcs_(icsText);
+  const existingByKey = loadExistingEventsByKey_(mapping.calendarId, feedHash);
+
+  const seen = {};
+  const stats = {
+    feed: mapping.name || mapping.feedUrl,
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    unchanged: 0,
+    skipped: 0
+  };
+
+  parsed.events.forEach(function(evt) {
+    const syncKey = buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey);
+    seen[syncKey] = true;
+    const existing = existingByKey[syncKey];
+
+    if (evt.cancelled) {
+      if (existing) {
+        Calendar.Events.remove(mapping.calendarId, existing.id);
+        stats.deleted++;
+      } else {
+        stats.skipped++;
+      }
+      return;
+    }
+
+    if (!shouldSyncEvent_(evt, now)) {
+      stats.skipped++;
+      return;
+    }
+
+    const resource = buildEventResource_(
+      evt,
+      mapping.feedUrl,
+      feedHash,
+      syncKey,
+      attendees,
+      parsed.calendarTimezone
+    );
+
+    const newHash = computeEventHash_(evt, attendees);
+    resource.extendedProperties.private.syncHash = newHash;
+
+    if (!existing) {
+      Calendar.Events.insert(resource, mapping.calendarId, { sendUpdates: "none" });
+      stats.created++;
+      return;
+    }
+
+    const oldHash =
+      (((existing.extendedProperties || {}).private || {}).syncHash) || "";
+
+    if (oldHash !== newHash) {
+      Calendar.Events.patch(resource, mapping.calendarId, existing.id, { sendUpdates: "none" });
+      stats.updated++;
+    } else {
+      stats.unchanged++;
+    }
+  });
+
+  if (cfg.deleteMissingFromFeed) {
+    Object.keys(existingByKey).forEach(function(syncKey) {
+      if (seen[syncKey]) return;
+      const ev = existingByKey[syncKey];
+      if (isFutureEventResource_(ev, now)) {
+        Calendar.Events.remove(mapping.calendarId, ev.id);
+        stats.deleted++;
+      }
+    });
+  }
+
+  return stats;
+}
+
+function getIcalSyncConfig_() {
+  if (typeof getIcalSyncConfig !== "function") {
+    throw new Error(
+      "Missing getIcalSyncConfig(). Create icalFeedSync.config.gs (see icalFeedSync.config.example.gs)."
+    );
+  }
+
+  const cfg = getIcalSyncConfig();
+  if (!cfg || typeof cfg !== "object") {
+    throw new Error("getIcalSyncConfig() must return a config object.");
+  }
+  if (!cfg.triggerEveryMinutes) cfg.triggerEveryMinutes = 15;
+  if (typeof cfg.deleteMissingFromFeed !== "boolean") cfg.deleteMissingFromFeed = true;
+  if (!Array.isArray(cfg.defaultAttendeeEmails)) cfg.defaultAttendeeEmails = [];
+  if (!Array.isArray(cfg.feedMappings) || !cfg.feedMappings.length) {
+    throw new Error("Config feedMappings must be a non-empty array.");
+  }
+
+  cfg.feedMappings.forEach(function(m, i) {
+    if (!m.feedUrl) throw new Error("feedMappings[" + i + "] missing feedUrl.");
+    if (!m.calendarId) throw new Error("feedMappings[" + i + "] missing calendarId.");
+    if (!Array.isArray(m.attendeeEmails)) m.attendeeEmails = [];
+  });
+
+  return cfg;
+}
+
+function fetchIcs_(url) {
+  const resp = UrlFetchApp.fetch(url, {
+    method: "get",
+    followRedirects: true,
+    muteHttpExceptions: true,
+    headers: { "Cache-Control": "no-cache" }
+  });
+  const code = resp.getResponseCode();
+  if (code !== 200) {
+    throw new Error("Failed to fetch ICS (" + code + "): " + url);
+  }
+  return resp.getContentText();
+}
+
+function parseIcs_(text) {
+  const lines = unfoldIcsLines_(text);
+  const events = [];
+  let inEvent = false;
+  let block = [];
+  let calendarTimezone = Session.getScriptTimeZone();
+
+  lines.forEach(function(line) {
+    const upper = line.toUpperCase();
+
+    if (!inEvent && upper.indexOf("X-WR-TIMEZONE:") === 0) {
+      calendarTimezone = line.substring(line.indexOf(":") + 1).trim() || calendarTimezone;
+      return;
+    }
+
+    if (upper === "BEGIN:VEVENT") {
+      inEvent = true;
+      block = [];
+      return;
+    }
+
+    if (upper === "END:VEVENT") {
+      inEvent = false;
+      const evt = parseVEvent_(block, calendarTimezone);
+      if (evt) events.push(evt);
+      return;
+    }
+
+    if (inEvent) block.push(line);
+  });
+
+  return { events: events, calendarTimezone: calendarTimezone };
+}
+
+function parseVEvent_(lines, fallbackTz) {
+  const props = {};
+  const recurrence = [];
+
+  lines.forEach(function(line) {
+    const p = parseIcsLine_(line);
+    if (!p) return;
+
+    if (!props[p.name]) props[p.name] = [];
+    props[p.name].push(p);
+
+    if (p.name === "RRULE" || p.name === "EXDATE" || p.name === "RDATE") {
+      recurrence.push(line);
+    }
+  });
+
+  const uidProp = firstProp_(props, "UID");
+  if (!uidProp) return null;
+
+  const status = ((firstProp_(props, "STATUS") || {}).value || "").toUpperCase();
+  const cancelled = status === "CANCELLED";
+
+  const startProp = firstProp_(props, "DTSTART");
+  const endProp = firstProp_(props, "DTEND");
+  const recIdProp = firstProp_(props, "RECURRENCE-ID");
+
+  const start = startProp ? parseIcsDate_(startProp, fallbackTz) : null;
+  let end = endProp ? parseIcsDate_(endProp, fallbackTz) : null;
+
+  if (!cancelled && !start) return null;
+  if (!cancelled && start && !end) end = defaultEndFromStart_(start);
+
+  const recurrenceIdKey = recIdProp
+    ? recIdProp.value + "|" + (recIdProp.params.TZID || "")
+    : "";
+
+  return {
+    uid: (uidProp.value || "").trim(),
+    recurrenceIdKey: recurrenceIdKey,
+    cancelled: cancelled,
+    status: status,
+    summary: unescapeIcsText_(((firstProp_(props, "SUMMARY") || {}).value) || ""),
+    description: unescapeIcsText_(((firstProp_(props, "DESCRIPTION") || {}).value) || ""),
+    location: unescapeIcsText_(((firstProp_(props, "LOCATION") || {}).value) || ""),
+    start: start,
+    end: end,
+    recurrence: recurrence
+  };
+}
+
+function parseIcsLine_(line) {
+  const idx = line.indexOf(":");
+  if (idx < 0) return null;
+
+  const left = line.substring(0, idx);
+  const value = line.substring(idx + 1);
+  const parts = left.split(";");
+  const name = parts[0].toUpperCase();
+  const params = {};
+
+  for (let i = 1; i < parts.length; i++) {
+    const p = parts[i];
+    const eq = p.indexOf("=");
+    if (eq < 0) {
+      params[p.toUpperCase()] = true;
+    } else {
+      const k = p.substring(0, eq).toUpperCase();
+      const v = p.substring(eq + 1).replace(/^"|"$/g, "");
+      params[k] = v;
+    }
+  }
+
+  return { name: name, params: params, value: value };
+}
+
+function unfoldIcsLines_(text) {
+  const raw = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const out = [];
+
+  raw.forEach(function(line) {
+    if ((line.indexOf(" ") === 0 || line.indexOf("\t") === 0) && out.length) {
+      out[out.length - 1] += line.substring(1);
+    } else {
+      out.push(line);
+    }
+  });
+
+  return out;
+}
+
+function parseIcsDate_(prop, fallbackTz) {
+  const value = (prop.value || "").trim();
+  const valueType = (prop.params.VALUE || "").toUpperCase();
+
+  if (valueType === "DATE" || /^\d{8}$/.test(value)) {
+    return {
+      type: "date",
+      date: value.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")
+    };
+  }
+
+  const m = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/);
+  if (!m) return null;
+
+  const sec = m[6] || "00";
+  const hasZ = !!m[7];
+  const dateTime = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + sec + (hasZ ? "Z" : "");
+  const tzid = prop.params.TZID || fallbackTz || null;
+
+  return {
+    type: "dateTime",
+    dateTime: dateTime,
+    timeZone: hasZ ? null : tzid
+  };
+}
+
+function defaultEndFromStart_(start) {
+  if (start.type === "date") {
+    const d = new Date(start.date + "T00:00:00");
+    d.setDate(d.getDate() + 1);
+    return { type: "date", date: formatYmd_(d) };
+  }
+
+  if (start.dateTime.slice(-1) === "Z") {
+    const d = new Date(start.dateTime);
+    d.setHours(d.getHours() + 1);
+    return { type: "dateTime", dateTime: d.toISOString().replace(".000Z", "Z"), timeZone: null };
+  }
+
+  const m = start.dateTime.match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/
+  );
+  const d = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6])
+  );
+  d.setHours(d.getHours() + 1);
+
+  return {
+    type: "dateTime",
+    dateTime: formatLocalDateTime_(d),
+    timeZone: start.timeZone || null
+  };
+}
+
+function shouldSyncEvent_(evt, now) {
+  if (evt.cancelled) return true;
+  if (!evt.start || !evt.end) return false;
+
+  if (evt.recurrence && evt.recurrence.length) {
+    return !recurrenceEnded_(evt.recurrence, now);
+  }
+
+  const end = parsedDateToDate_(evt.end);
+  if (!end || isNaN(end.getTime())) return true;
+  return end.getTime() >= now.getTime();
+}
+
+function recurrenceEnded_(recurrenceLines, now) {
+  for (let i = 0; i < recurrenceLines.length; i++) {
+    const line = recurrenceLines[i];
+    if (line.toUpperCase().indexOf("RRULE:") !== 0) continue;
+
+    const rule = line.substring(line.indexOf(":") + 1);
+    const parts = rule.split(";");
+    for (let j = 0; j < parts.length; j++) {
+      if (parts[j].indexOf("UNTIL=") !== 0) continue;
+      const untilRaw = parts[j].substring("UNTIL=".length);
+      const untilDate = parseUntilDate_(untilRaw);
+      if (untilDate && untilDate.getTime() < now.getTime()) return true;
+    }
+  }
+  return false;
+}
+
+function parseUntilDate_(untilRaw) {
+  if (/^\d{8}$/.test(untilRaw)) {
+    return new Date(untilRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3T23:59:59"));
+  }
+  const m = untilRaw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/);
+  if (!m) return null;
+  const sec = m[6] || "00";
+  const iso = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + sec + (m[7] ? "Z" : "");
+  return new Date(iso);
+}
+
+function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbackTz) {
+  const resource = {
+    summary: evt.summary || "(No title)",
+    description: evt.description || "",
+    location: evt.location || "",
+    start: toGoogleDate_(evt.start, fallbackTz),
+    end: toGoogleDate_(evt.end, fallbackTz),
+    attendees: attendees.map(function(email) {
+      return { email: email };
+    }),
+    extendedProperties: {
+      private: {
+        sourceFeed: feedHash,
+        sourceUrl: feedUrl,
+        sourceUid: evt.uid,
+        syncKey: syncKey
+      }
+    }
+  };
+
+  if (evt.recurrence && evt.recurrence.length) {
+    resource.recurrence = evt.recurrence.slice();
+  }
+
+  return resource;
+}
+
+function toGoogleDate_(parsed, fallbackTz) {
+  if (parsed.type === "date") return { date: parsed.date };
+
+  const out = { dateTime: parsed.dateTime };
+  if (parsed.dateTime.slice(-1) !== "Z") {
+    out.timeZone = parsed.timeZone || fallbackTz || Session.getScriptTimeZone();
+  }
+  return out;
+}
+
+function computeEventHash_(evt, attendees) {
+  const normalized = {
+    uid: evt.uid,
+    recurrenceIdKey: evt.recurrenceIdKey || "",
+    summary: evt.summary || "",
+    description: evt.description || "",
+    location: evt.location || "",
+    status: evt.status || "",
+    start: evt.start || null,
+    end: evt.end || null,
+    recurrence: (evt.recurrence || []).slice().sort(),
+    attendees: attendees.slice().sort()
+  };
+  return sha256Hex_(JSON.stringify(normalized));
+}
+
+function buildSyncKey_(feedHash, uid, recurrenceIdKey) {
+  const raw = uid + "||" + (recurrenceIdKey || "");
+  return feedHash + ":" + sha256Hex_(raw).slice(0, 40);
+}
+
+function loadExistingEventsByKey_(calendarId, feedHash) {
+  const out = {};
+  let pageToken;
+
+  do {
+    const resp = Calendar.Events.list(calendarId, {
+      privateExtendedProperty: ["sourceFeed=" + feedHash],
+      showDeleted: false,
+      singleEvents: false,
+      maxResults: 2500,
+      pageToken: pageToken
+    });
+
+    (resp.items || []).forEach(function(ev) {
+      const key = ((((ev.extendedProperties || {}).private) || {}).syncKey) || "";
+      if (key) out[key] = ev;
+    });
+
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
+
+  return out;
+}
+
+function isFutureEventResource_(ev, now) {
+  if (ev.recurrence && ev.recurrence.length) {
+    return !recurrenceEnded_(ev.recurrence, now);
+  }
+
+  const end = ev.end || ev.start || null;
+  if (!end) return false;
+
+  let when;
+  if (end.dateTime) when = new Date(end.dateTime);
+  if (end.date) when = new Date(end.date + "T00:00:00");
+
+  if (!when || isNaN(when.getTime())) return true;
+  return when.getTime() >= now.getTime();
+}
+
+function parsedDateToDate_(parsed) {
+  if (!parsed) return null;
+  if (parsed.type === "date") return new Date(parsed.date + "T00:00:00");
+  return new Date(parsed.dateTime);
+}
+
+function uniqueEmails_(emails) {
+  const s = {};
+  emails
+    .map(function(e) { return (e || "").trim().toLowerCase(); })
+    .filter(function(e) { return !!e; })
+    .forEach(function(e) { s[e] = true; });
+  return Object.keys(s);
+}
+
+function firstProp_(props, key) {
+  const arr = props[key];
+  return arr && arr.length ? arr[0] : null;
+}
+
+function unescapeIcsText_(s) {
+  return (s || "")
+    .replace(/\\\\/g, "\u0000")
+    .replace(/\\n/gi, "\n")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .replace(/\u0000/g, "\\");
+}
+
+function sha256Hex_(input) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    input,
+    Utilities.Charset.UTF_8
+  );
+  return bytes
+    .map(function(b) {
+      const v = (b + 256) % 256;
+      return (v < 16 ? "0" : "") + v.toString(16);
+    })
+    .join("");
+}
+
+function formatYmd_(d) {
+  const p = function(n) { return n < 10 ? "0" + n : "" + n; };
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+
+function formatLocalDateTime_(d) {
+  const p = function(n) { return n < 10 ? "0" + n : "" + n; };
+  return (
+    d.getFullYear() +
+    "-" + p(d.getMonth() + 1) +
+    "-" + p(d.getDate()) +
+    "T" + p(d.getHours()) +
+    ":" + p(d.getMinutes()) +
+    ":" + p(d.getSeconds())
+  );
+}
