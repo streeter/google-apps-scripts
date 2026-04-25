@@ -341,9 +341,21 @@ function syncOneFeed_(cfg, mapping, today) {
     );
     stats.updated++;
     if (changedFromLastFeedState) {
-      console.log("[UPDATE] Event " + existing.id + " (feed change detected)");
+      console.log(
+        '[UPDATE] "' +
+          (effectiveEvt.summary || "(No title)") +
+          '" (' +
+          existing.id +
+          ", feed change detected)",
+      );
     } else {
-      console.log("[UPDATE] Event " + existing.id + " (forced resync)");
+      console.log(
+        '[UPDATE] "' +
+          (effectiveEvt.summary || "(No title)") +
+          '" (' +
+          existing.id +
+          ", forced resync)",
+      );
     }
     const arrivalAnchorStart = reconcileArrivalPlaceholder_(
       effectiveEvt,
@@ -1164,7 +1176,11 @@ function reconcileArrivalPlaceholder_(
     });
     stats.arrivalCreated++;
     console.log(
-      "[CREATE] Arrival placeholder for source event " + syncedEvent.id,
+      '[CREATE] Arrival placeholder for "' +
+        (evt.summary || "(No title)") +
+        '" (' +
+        syncedEvent.id +
+        ")",
     );
     return arrivalStart;
   }
@@ -1189,7 +1205,11 @@ function reconcileArrivalPlaceholder_(
   );
   stats.arrivalUpdated++;
   console.log(
-    "[UPDATE] Arrival placeholder " + existingArrival.id + " (forced resync)",
+    '[UPDATE] Arrival placeholder for "' +
+      (evt.summary || "(No title)") +
+      '" (' +
+      existingArrival.id +
+      ", forced resync)",
   );
   return arrivalStart;
 }
@@ -1241,6 +1261,7 @@ function reconcileDrivePlaceholder_(
   attendees,
 ) {
   const destination = (evt.location || "").trim();
+  const sourceTitle = evt.summary || "(No title)";
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
 
   if (!driveOpts.enabled) {
@@ -1259,13 +1280,21 @@ function reconcileDrivePlaceholder_(
 
   if (!isEventStartOnOrAfterCutoff_(evt, today)) {
     stats.driveSkipped++;
-    console.info("[SKIP] Drive placeholder ignored for pre-today source event");
+    console.info(
+      '[SKIP] Drive placeholder ignored for pre-today event "' +
+        sourceTitle +
+        '"',
+    );
     return;
   }
 
   if (isAllDayEvent_(evt)) {
     stats.driveSkipped++;
-    console.info("[SKIP] Drive placeholder ignored for all-day source event");
+    console.info(
+      '[SKIP] Drive placeholder ignored for all-day event "' +
+        sourceTitle +
+        '"',
+    );
     maybeDeleteDrivePlaceholder_(
       mapping,
       feedHash,
@@ -1281,7 +1310,9 @@ function reconcileDrivePlaceholder_(
   if (!destination) {
     stats.driveSkipped++;
     console.info(
-      "[SKIP] Drive placeholder ignored because source event has no location",
+      '[SKIP] Drive placeholder ignored because "' +
+        sourceTitle +
+        '" has no location',
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -1329,8 +1360,23 @@ function reconcileDrivePlaceholder_(
   );
   if (drivePlan.skipReason) {
     stats.driveSkipped++;
+    if (drivePlan.routeLookupFailed) {
+      console.warn(
+        '[WARN] Could not compute drive time for "' +
+          sourceTitle +
+          '" (destination: ' +
+          destination +
+          ")" +
+          (drivePlan.lookupFailures && drivePlan.lookupFailures.length
+            ? " after attempts: " + drivePlan.lookupFailures.join(", ")
+            : ""),
+      );
+    }
     console.info(
-      "[SKIP] Drive placeholder ignored because " + drivePlan.skipReason,
+      '[SKIP] Drive placeholder ignored for "' +
+        sourceTitle +
+        '" because ' +
+        drivePlan.skipReason,
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -1384,7 +1430,11 @@ function reconcileDrivePlaceholder_(
     });
     stats.driveCreated++;
     console.log(
-      "[CREATE] Drive placeholder for source event " + syncedEvent.id,
+      '[CREATE] Drive placeholder for "' +
+        sourceTitle +
+        '" (' +
+        syncedEvent.id +
+        ")",
     );
     return;
   }
@@ -1392,7 +1442,11 @@ function reconcileDrivePlaceholder_(
   if (!isManagedDriveEventForFeed_(existingDrive, mapping.feedUrl, feedHash)) {
     stats.driveSkipped++;
     console.info(
-      "[SKIP] Not updating unmanaged drive placeholder " + existingDrive.id,
+      '[SKIP] Not updating unmanaged drive placeholder "' +
+        (existingDrive.summary || "(No title)") +
+        '" (' +
+        existingDrive.id +
+        ")",
     );
     return;
   }
@@ -1402,7 +1456,11 @@ function reconcileDrivePlaceholder_(
   });
   stats.driveUpdated++;
   console.log(
-    "[UPDATE] Drive placeholder " + existingDrive.id + " (forced resync)",
+    '[UPDATE] Drive placeholder for "' +
+      sourceTitle +
+      '" (' +
+      existingDrive.id +
+      ", forced resync)",
   );
 }
 
@@ -1428,7 +1486,13 @@ function maybeDeleteDrivePlaceholder_(
   delete existingDriveByKey[driveSyncKey];
   stats.driveDeleted++;
   console.log(
-    "[DELETE] Drive placeholder " + existingDrive.id + " (" + reason + ")",
+    '[DELETE] Drive placeholder "' +
+      (existingDrive.summary || "(No title)") +
+      '" (' +
+      existingDrive.id +
+      ", " +
+      reason +
+      ")",
   );
 }
 
@@ -1456,7 +1520,13 @@ function maybeDeleteArrivalPlaceholder_(
   delete existingArrivalByKey[arrivalSyncKey];
   stats.arrivalDeleted++;
   console.log(
-    "[DELETE] Arrival placeholder " + existingArrival.id + " (" + reason + ")",
+    '[DELETE] Arrival placeholder "' +
+      (existingArrival.summary || "(No title)") +
+      '" (' +
+      existingArrival.id +
+      ", " +
+      reason +
+      ")",
   );
 }
 
@@ -1586,6 +1656,7 @@ function resolveDrivePlan_(
   driveOpts,
   driveDurationCache,
 ) {
+  const lookupFailures = [];
   const previousEvent = findPreviousDriveOriginEvent_(
     calendarId,
     driveEnd,
@@ -1621,12 +1692,21 @@ function resolveDrivePlan_(
         previousEventId: previousEvent.id || "",
       };
     }
+    lookupFailures.push(previousLocation + " -> " + destination);
     console.info(
       "[INFO] Drive lookup from previous event location failed; falling back to configured origin",
     );
   }
 
   if (!driveOpts.originAddress) {
+    if (lookupFailures.length) {
+      return {
+        skipReason:
+          "route lookup failed and no default origin address is configured",
+        routeLookupFailed: true,
+        lookupFailures: lookupFailures,
+      };
+    }
     return { skipReason: "no default origin address is configured" };
   }
   const driveMinutes = getDriveMinutes_(
@@ -1635,7 +1715,12 @@ function resolveDrivePlan_(
     driveDurationCache,
   );
   if (driveMinutes === null) {
-    return { skipReason: "route lookup failed" };
+    lookupFailures.push(driveOpts.originAddress + " -> " + destination);
+    return {
+      skipReason: "route lookup failed",
+      routeLookupFailed: true,
+      lookupFailures: lookupFailures,
+    };
   }
   if (driveMinutes <= driveOpts.minDriveMinutesToCreate) {
     return {

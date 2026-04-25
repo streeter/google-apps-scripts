@@ -16,6 +16,7 @@ function loadIcalSyncContext() {
     console: {
       log: () => {},
       info: () => {},
+      warn: () => {},
       error: () => {},
     },
     JSON,
@@ -416,6 +417,32 @@ test("resolveDrivePlan_ falls back to default origin when previous route lookup 
   assert.equal(plan.originAddress, "123 Main St, Brooklyn, NY");
   assert.equal(plan.driveMinutes, 30);
   assert.equal(plan.previousEventId, "");
+});
+
+test("resolveDrivePlan_ marks routeLookupFailed when drive cannot be computed", () => {
+  const ctx = loadIcalSyncContext();
+  const driveOpts = {
+    originAddress: "123 Main St, Brooklyn, NY",
+    minDriveMinutesToCreate: 10,
+  };
+  const driveEnd = new Date("2099-05-01T15:00:00Z");
+
+  ctx.findPreviousDriveOriginEvent_ = () => null;
+  ctx.getDriveMinutes_ = () => null;
+
+  const plan = ctx.resolveDrivePlan_(
+    "calendar-1",
+    "source-1",
+    driveEnd,
+    "Main Field",
+    driveOpts,
+    {},
+  );
+
+  assert.equal(plan.routeLookupFailed, true);
+  assert.match(plan.skipReason, /route lookup failed/i);
+  assert.equal(Array.isArray(plan.lookupFailures), true);
+  assert.equal(plan.lookupFailures.length, 1);
 });
 
 test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > threshold", () => {
