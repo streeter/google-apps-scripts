@@ -22,7 +22,8 @@ function loadIcalSyncContext() {
     },
     PropertiesService: {
       getScriptProperties: () => ({
-        getProperty: (key) => (scriptProperties.has(key) ? scriptProperties.get(key) : null),
+        getProperty: (key) =>
+          scriptProperties.has(key) ? scriptProperties.get(key) : null,
         setProperty: (key, value) => scriptProperties.set(key, String(value)),
       }),
     },
@@ -30,7 +31,10 @@ function loadIcalSyncContext() {
       DigestAlgorithm: { SHA_256: "SHA_256" },
       Charset: { UTF_8: "UTF_8" },
       computeDigest: (_algorithm, input) => {
-        const hash = crypto.createHash("sha256").update(String(input), "utf8").digest();
+        const hash = crypto
+          .createHash("sha256")
+          .update(String(input), "utf8")
+          .digest();
         return Array.from(hash.values());
       },
     },
@@ -79,7 +83,9 @@ function loadIcalSyncContext() {
           return this;
         },
         getDirections() {
-          throw new Error("Maps.newDirectionFinder().getDirections() mock not set");
+          throw new Error(
+            "Maps.newDirectionFinder().getDirections() mock not set",
+          );
         },
       }),
     },
@@ -109,7 +115,9 @@ function baseStats() {
 test("getIcalSyncConfig_ defaults minDriveMinutesToCreate to 10", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
-    feedMappings: [{ feedUrl: "https://example.com/a.ics", calendarId: "cal1" }],
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
   });
 
   const cfg = ctx.getIcalSyncConfig_();
@@ -142,7 +150,12 @@ test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > t
   ctx.Calendar.Events.insert = (_resource, calendarId) => {
     assert.equal(calendarId, "calendar-1");
     inserted.push(_resource);
-    return { id: "drive-1", start: _resource.start, end: _resource.end, extendedProperties: _resource.extendedProperties };
+    return {
+      id: "drive-1",
+      start: _resource.start,
+      end: _resource.end,
+      extendedProperties: _resource.extendedProperties,
+    };
   };
   ctx.Calendar.Events.patch = () => {
     throw new Error("unexpected patch");
@@ -191,7 +204,7 @@ test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > t
     seenDrive,
     today,
     statsAtThreshold,
-    {}
+    {},
   );
   assert.equal(statsAtThreshold.driveCreated, 0);
   assert.equal(statsAtThreshold.driveSkipped, 1);
@@ -211,7 +224,7 @@ test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > t
     {},
     today,
     statsAboveThreshold,
-    {}
+    {},
   );
   assert.equal(statsAboveThreshold.driveCreated, 1);
   assert.equal(inserted.length, 1);
@@ -232,7 +245,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
     driveStart,
     driveEnd,
     "drivehash123",
-    "Origin Address"
+    "Origin Address",
   );
 
   const p = resource.extendedProperties.private;
@@ -246,17 +259,18 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   const ctx = loadIcalSyncContext();
   const inserts = [];
 
-  ctx.fetchIcs_ = () => [
-    "BEGIN:VCALENDAR",
-    "BEGIN:VEVENT",
-    "UID:uid-1",
-    "DTSTART:20990501T150000Z",
-    "DTEND:20990501T160000Z",
-    "SUMMARY:Client Meeting",
-    "LOCATION:Seattle, WA",
-    "END:VEVENT",
-    "END:VCALENDAR",
-  ].join("\n");
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:uid-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Client Meeting",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
   ctx.loadExistingEventsByKey_ = () => ({});
   ctx.loadExistingDriveEventsByKey_ = () => ({});
   ctx.getDriveMinutes_ = () => 25;
@@ -303,20 +317,31 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
     originAddress: "",
   };
 
-  const stats = ctx.syncOneFeed_(cfg, mapping, new Date("2026-01-01T00:00:00Z"));
+  const stats = ctx.syncOneFeed_(
+    cfg,
+    mapping,
+    new Date("2026-01-01T00:00:00Z"),
+  );
 
   assert.equal(stats.created, 1);
   assert.equal(stats.driveCreated, 1);
   assert.equal(inserts.length, 2);
 
-  const source = inserts.find((r) => r.extendedProperties.private.managedKind === "source");
-  const drive = inserts.find((r) => r.extendedProperties.private.managedKind === "drive");
+  const source = inserts.find(
+    (r) => r.extendedProperties.private.managedKind === "source",
+  );
+  const drive = inserts.find(
+    (r) => r.extendedProperties.private.managedKind === "drive",
+  );
 
   assert.ok(source);
   assert.ok(drive);
-  assert.equal(drive.extendedProperties.private.sourceEventId, "source-created-1");
+  assert.equal(
+    drive.extendedProperties.private.sourceEventId,
+    "source-created-1",
+  );
   assert.equal(
     drive.extendedProperties.private.syncKey,
-    ctx.buildDriveSyncKey_(drive.extendedProperties.private.sourceSyncKey)
+    ctx.buildDriveSyncKey_(drive.extendedProperties.private.sourceSyncKey),
   );
 });

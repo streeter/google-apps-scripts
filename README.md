@@ -20,4 +20,6 @@ The configurations for the files should live in `colorAttendeeConfig.gs` and `ge
 ## ✅ Testing
 
 - Run tests locally with `npm test`.
+- Run formatting lint with `npm run lint`.
+- Auto-format checked files with `npm run format`.
 - Current suite: [`tests/icalFeedSync.test.js`](tests/icalFeedSync.test.js).

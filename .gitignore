@@ -1,3 +1,4 @@
 getPersonalCalendar.gs
 colorAttendeeConfig.gs
 ical-syncing/icalFeedSync.config.gs
+node_modules/

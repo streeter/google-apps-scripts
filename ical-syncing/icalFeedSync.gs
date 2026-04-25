@@ -19,10 +19,10 @@ function setupIcalFeedSyncTrigger() {
   const cfg = getIcalSyncConfig_();
   const fn = "syncIcalFeeds";
   ScriptApp.getProjectTriggers()
-    .filter(function(t) {
+    .filter(function (t) {
       return t.getHandlerFunction() === fn;
     })
-    .forEach(function(t) {
+    .forEach(function (t) {
       ScriptApp.deleteTrigger(t);
     });
 
@@ -40,17 +40,26 @@ function syncIcalFeeds() {
   const cfg = getIcalSyncConfig_();
   const today = startOfToday_();
   const results = [];
-  console.log("[SYNC] Starting iCal feed sync for " + cfg.feedMappings.length + " feed(s)");
+  console.log(
+    "[SYNC] Starting iCal feed sync for " +
+      cfg.feedMappings.length +
+      " feed(s)",
+  );
   console.log("[SYNC] Date cutoff (inclusive): " + today.toISOString());
 
-  cfg.feedMappings.forEach(function(mapping) {
+  cfg.feedMappings.forEach(function (mapping) {
     try {
       results.push(syncOneFeed_(cfg, mapping, today));
     } catch (e) {
-      console.error("[ERROR] Failed syncing feed " + (mapping.name || mapping.feedUrl) + ": " + String(e));
+      console.error(
+        "[ERROR] Failed syncing feed " +
+          (mapping.name || mapping.feedUrl) +
+          ": " +
+          String(e),
+      );
       results.push({
         feed: mapping.name || mapping.feedUrl,
-        error: String(e)
+        error: String(e),
       });
     }
   });
@@ -75,23 +84,34 @@ function syncOneFeed_(cfg, mapping, today) {
   const attendees = uniqueEmails_(
     (mapping.attendeeEmails && mapping.attendeeEmails.length
       ? mapping.attendeeEmails
-      : cfg.defaultAttendeeEmails) || []
+      : cfg.defaultAttendeeEmails) || [],
   );
   const driveOpts = buildDriveOptions_(cfg, mapping);
   const driveDurationCache = {};
-  console.log("[FEED] Processing \"" + feedName + "\" -> " + mapping.calendarId);
+  console.log('[FEED] Processing "' + feedName + '" -> ' + mapping.calendarId);
 
   const icsText = fetchIcs_(mapping.feedUrl);
   const parsed = parseIcs_(icsText);
   const existingByKey = loadExistingEventsByKey_(mapping.calendarId, feedHash);
-  const existingDriveByKey = loadExistingDriveEventsByKey_(mapping.calendarId, feedHash);
-  console.log(
-    "[INFO] Feed \"" + feedName + "\" has " + parsed.events.length + " VEVENT(s); found " +
-      Object.keys(existingByKey).length + " existing managed event(s)"
+  const existingDriveByKey = loadExistingDriveEventsByKey_(
+    mapping.calendarId,
+    feedHash,
   );
   console.log(
-    "[INFO] Feed \"" + feedName + "\" has " +
-      Object.keys(existingDriveByKey).length + " existing managed drive placeholder(s)"
+    '[INFO] Feed "' +
+      feedName +
+      '" has ' +
+      parsed.events.length +
+      " VEVENT(s); found " +
+      Object.keys(existingByKey).length +
+      " existing managed event(s)",
+  );
+  console.log(
+    '[INFO] Feed "' +
+      feedName +
+      '" has ' +
+      Object.keys(existingDriveByKey).length +
+      " existing managed drive placeholder(s)",
   );
 
   const seen = {};
@@ -106,10 +126,10 @@ function syncOneFeed_(cfg, mapping, today) {
     driveCreated: 0,
     driveUpdated: 0,
     driveDeleted: 0,
-    driveSkipped: 0
+    driveSkipped: 0,
   };
 
-  parsed.events.forEach(function(evt) {
+  parsed.events.forEach(function (evt) {
     const syncKey = buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey);
     const driveSyncKey = buildDriveSyncKey_(syncKey);
     seen[syncKey] = true;
@@ -125,11 +145,18 @@ function syncOneFeed_(cfg, mapping, today) {
         if (isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
           Calendar.Events.remove(mapping.calendarId, existing.id);
           stats.deleted++;
-          console.log("[DELETE] Deleted canceled event " + existing.id + " from " + feedName);
+          console.log(
+            "[DELETE] Deleted canceled event " +
+              existing.id +
+              " from " +
+              feedName,
+          );
         } else {
           stats.skipped++;
           console.info(
-            "[SKIP] Not deleting non-managed event " + existing.id + " (cancelled upstream)"
+            "[SKIP] Not deleting non-managed event " +
+              existing.id +
+              " (cancelled upstream)",
           );
         }
       } else {
@@ -142,14 +169,16 @@ function syncOneFeed_(cfg, mapping, today) {
         existingDriveByKey,
         today,
         stats,
-        "source event canceled"
+        "source event canceled",
       );
       return;
     }
 
     if (!shouldSyncEvent_(evt, today)) {
       stats.skipped++;
-      console.info("[SKIP] Pre-today event \"" + (evt.summary || "(No title)") + "\"");
+      console.info(
+        '[SKIP] Pre-today event "' + (evt.summary || "(No title)") + '"',
+      );
       return;
     }
 
@@ -159,16 +188,20 @@ function syncOneFeed_(cfg, mapping, today) {
       feedHash,
       syncKey,
       attendees,
-      parsed.calendarTimezone
+      parsed.calendarTimezone,
     );
 
     const newHash = computeEventHash_(evt, attendees);
     createResource.extendedProperties.private.syncHash = newHash;
 
     if (!existing) {
-      const inserted = Calendar.Events.insert(createResource, mapping.calendarId, { sendUpdates: "none" });
+      const inserted = Calendar.Events.insert(
+        createResource,
+        mapping.calendarId,
+        { sendUpdates: "none" },
+      );
       stats.created++;
-      console.log("[CREATE] \"" + (evt.summary || "(No title)") + "\"");
+      console.log('[CREATE] "' + (evt.summary || "(No title)") + '"');
       reconcileDrivePlaceholder_(
         evt,
         inserted,
@@ -181,7 +214,7 @@ function syncOneFeed_(cfg, mapping, today) {
         seenDrive,
         today,
         stats,
-        driveDurationCache
+        driveDurationCache,
       );
       return;
     }
@@ -189,15 +222,19 @@ function syncOneFeed_(cfg, mapping, today) {
     if (!isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
       stats.skipped++;
       console.info(
-        "[SKIP] Not updating event " + existing.id + " because it is not managed by this feed"
+        "[SKIP] Not updating event " +
+          existing.id +
+          " because it is not managed by this feed",
       );
       stats.driveSkipped++;
-      console.info("[SKIP] Drive placeholder skipped because source event is unmanaged");
+      console.info(
+        "[SKIP] Drive placeholder skipped because source event is unmanaged",
+      );
       return;
     }
 
     const oldHash =
-      (((existing.extendedProperties || {}).private || {}).syncHash) || "";
+      ((existing.extendedProperties || {}).private || {}).syncHash || "";
     const changedFromLastFeedState = oldHash !== newHash;
     const patchResource = buildEventPatchResource_(
       evt,
@@ -205,10 +242,15 @@ function syncOneFeed_(cfg, mapping, today) {
       feedHash,
       syncKey,
       attendees,
-      parsed.calendarTimezone
+      parsed.calendarTimezone,
     );
     patchResource.extendedProperties.private.syncHash = newHash;
-    const patched = Calendar.Events.patch(patchResource, mapping.calendarId, existing.id, { sendUpdates: "none" });
+    const patched = Calendar.Events.patch(
+      patchResource,
+      mapping.calendarId,
+      existing.id,
+      { sendUpdates: "none" },
+    );
     stats.updated++;
     if (changedFromLastFeedState) {
       console.log("[UPDATE] Event " + existing.id + " (feed change detected)");
@@ -227,12 +269,12 @@ function syncOneFeed_(cfg, mapping, today) {
       seenDrive,
       today,
       stats,
-      driveDurationCache
+      driveDurationCache,
     );
   });
 
   if (cfg.deleteMissingFromFeed) {
-    Object.keys(existingByKey).forEach(function(syncKey) {
+    Object.keys(existingByKey).forEach(function (syncKey) {
       if (seen[syncKey]) return;
       const ev = existingByKey[syncKey];
       if (!isManagedEventForFeed_(ev, mapping.feedUrl, feedHash)) {
@@ -242,36 +284,56 @@ function syncOneFeed_(cfg, mapping, today) {
       if (isFutureEventResource_(ev, today)) {
         Calendar.Events.remove(mapping.calendarId, ev.id);
         stats.deleted++;
-        console.log("[DELETE] Deleted feed-missing event " + ev.id + " from " + feedName);
+        console.log(
+          "[DELETE] Deleted feed-missing event " + ev.id + " from " + feedName,
+        );
       }
     });
 
-    Object.keys(existingDriveByKey).forEach(function(driveSyncKey) {
+    Object.keys(existingDriveByKey).forEach(function (driveSyncKey) {
       if (seenDrive[driveSyncKey]) return;
       const driveEv = existingDriveByKey[driveSyncKey];
       if (!isManagedDriveEventForFeed_(driveEv, mapping.feedUrl, feedHash)) {
-        console.info("[SKIP] Not deleting non-managed drive placeholder " + driveEv.id);
+        console.info(
+          "[SKIP] Not deleting non-managed drive placeholder " + driveEv.id,
+        );
         return;
       }
       if (isFutureEventResource_(driveEv, today)) {
         Calendar.Events.remove(mapping.calendarId, driveEv.id);
         stats.driveDeleted++;
-        console.log("[DELETE] Deleted feed-missing drive placeholder " + driveEv.id + " from " + feedName);
+        console.log(
+          "[DELETE] Deleted feed-missing drive placeholder " +
+            driveEv.id +
+            " from " +
+            feedName,
+        );
       }
     });
   }
 
   console.log(
-    "[SUMMARY] Feed \"" + feedName + "\": " +
-      "created=" + stats.created +
-      ", updated=" + stats.updated +
-      ", deleted=" + stats.deleted +
-      ", unchanged=" + stats.unchanged +
-      ", skipped=" + stats.skipped +
-      ", driveCreated=" + stats.driveCreated +
-      ", driveUpdated=" + stats.driveUpdated +
-      ", driveDeleted=" + stats.driveDeleted +
-      ", driveSkipped=" + stats.driveSkipped
+    '[SUMMARY] Feed "' +
+      feedName +
+      '": ' +
+      "created=" +
+      stats.created +
+      ", updated=" +
+      stats.updated +
+      ", deleted=" +
+      stats.deleted +
+      ", unchanged=" +
+      stats.unchanged +
+      ", skipped=" +
+      stats.skipped +
+      ", driveCreated=" +
+      stats.driveCreated +
+      ", driveUpdated=" +
+      stats.driveUpdated +
+      ", driveDeleted=" +
+      stats.driveDeleted +
+      ", driveSkipped=" +
+      stats.driveSkipped,
   );
   return stats;
 }
@@ -282,7 +344,7 @@ function syncOneFeed_(cfg, mapping, today) {
 function getIcalSyncConfig_() {
   if (typeof getIcalSyncConfig !== "function") {
     throw new Error(
-      "Missing getIcalSyncConfig(). Create icalFeedSync.config.gs (see icalFeedSync.config.example.gs)."
+      "Missing getIcalSyncConfig(). Create icalFeedSync.config.gs (see icalFeedSync.config.example.gs).",
     );
   }
 
@@ -291,26 +353,37 @@ function getIcalSyncConfig_() {
     throw new Error("getIcalSyncConfig() must return a config object.");
   }
   if (!cfg.triggerEveryMinutes) cfg.triggerEveryMinutes = 15;
-  if (typeof cfg.deleteMissingFromFeed !== "boolean") cfg.deleteMissingFromFeed = true;
+  if (typeof cfg.deleteMissingFromFeed !== "boolean")
+    cfg.deleteMissingFromFeed = true;
   if (!Array.isArray(cfg.defaultAttendeeEmails)) cfg.defaultAttendeeEmails = [];
-  if (typeof cfg.addDriveTimePlaceholders !== "boolean") cfg.addDriveTimePlaceholders = false;
-  if (typeof cfg.defaultOriginAddress !== "string") cfg.defaultOriginAddress = "";
-  if (typeof cfg.minDriveMinutesToCreate !== "number" || isNaN(cfg.minDriveMinutesToCreate)) {
+  if (typeof cfg.addDriveTimePlaceholders !== "boolean")
+    cfg.addDriveTimePlaceholders = false;
+  if (typeof cfg.defaultOriginAddress !== "string")
+    cfg.defaultOriginAddress = "";
+  if (
+    typeof cfg.minDriveMinutesToCreate !== "number" ||
+    isNaN(cfg.minDriveMinutesToCreate)
+  ) {
     cfg.minDriveMinutesToCreate = 10;
   }
   if (cfg.minDriveMinutesToCreate < 1) cfg.minDriveMinutesToCreate = 1;
-  if (typeof cfg.driveEventTitleTemplate !== "string" || !cfg.driveEventTitleTemplate.trim()) {
+  if (
+    typeof cfg.driveEventTitleTemplate !== "string" ||
+    !cfg.driveEventTitleTemplate.trim()
+  ) {
     cfg.driveEventTitleTemplate = "Drive to {{title}}";
   }
   if (!Array.isArray(cfg.feedMappings) || !cfg.feedMappings.length) {
     throw new Error("Config feedMappings must be a non-empty array.");
   }
 
-  cfg.feedMappings.forEach(function(m, i) {
+  cfg.feedMappings.forEach(function (m, i) {
     if (!m.feedUrl) throw new Error("feedMappings[" + i + "] missing feedUrl.");
-    if (!m.calendarId) throw new Error("feedMappings[" + i + "] missing calendarId.");
+    if (!m.calendarId)
+      throw new Error("feedMappings[" + i + "] missing calendarId.");
     if (!Array.isArray(m.attendeeEmails)) m.attendeeEmails = [];
-    if (typeof m.addDriveTimePlaceholders !== "boolean") m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
+    if (typeof m.addDriveTimePlaceholders !== "boolean")
+      m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
     if (typeof m.originAddress !== "string") m.originAddress = "";
   });
 
@@ -325,7 +398,7 @@ function fetchIcs_(url) {
     method: "get",
     followRedirects: true,
     muteHttpExceptions: true,
-    headers: { "Cache-Control": "no-cache" }
+    headers: { "Cache-Control": "no-cache" },
   });
   const code = resp.getResponseCode();
   if (code !== 200) {
@@ -344,11 +417,12 @@ function parseIcs_(text) {
   let block = [];
   let calendarTimezone = Session.getScriptTimeZone();
 
-  lines.forEach(function(line) {
+  lines.forEach(function (line) {
     const upper = line.toUpperCase();
 
     if (!inEvent && upper.indexOf("X-WR-TIMEZONE:") === 0) {
-      calendarTimezone = line.substring(line.indexOf(":") + 1).trim() || calendarTimezone;
+      calendarTimezone =
+        line.substring(line.indexOf(":") + 1).trim() || calendarTimezone;
       return;
     }
 
@@ -378,7 +452,7 @@ function parseVEvent_(lines, fallbackTz) {
   const props = {};
   const recurrence = [];
 
-  lines.forEach(function(line) {
+  lines.forEach(function (line) {
     const p = parseIcsLine_(line);
     if (!p) return;
 
@@ -393,7 +467,9 @@ function parseVEvent_(lines, fallbackTz) {
   const uidProp = firstProp_(props, "UID");
   if (!uidProp) return null;
 
-  const status = ((firstProp_(props, "STATUS") || {}).value || "").toUpperCase();
+  const status = (
+    (firstProp_(props, "STATUS") || {}).value || ""
+  ).toUpperCase();
   const cancelled = status === "CANCELLED";
 
   const startProp = firstProp_(props, "DTSTART");
@@ -415,12 +491,16 @@ function parseVEvent_(lines, fallbackTz) {
     recurrenceIdKey: recurrenceIdKey,
     cancelled: cancelled,
     status: status,
-    summary: unescapeIcsText_(((firstProp_(props, "SUMMARY") || {}).value) || ""),
-    description: unescapeIcsText_(((firstProp_(props, "DESCRIPTION") || {}).value) || ""),
-    location: unescapeIcsText_(((firstProp_(props, "LOCATION") || {}).value) || ""),
+    summary: unescapeIcsText_((firstProp_(props, "SUMMARY") || {}).value || ""),
+    description: unescapeIcsText_(
+      (firstProp_(props, "DESCRIPTION") || {}).value || "",
+    ),
+    location: unescapeIcsText_(
+      (firstProp_(props, "LOCATION") || {}).value || "",
+    ),
     start: start,
     end: end,
-    recurrence: recurrence
+    recurrence: recurrence,
   };
 }
 
@@ -459,7 +539,7 @@ function unfoldIcsLines_(text) {
   const raw = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   const out = [];
 
-  raw.forEach(function(line) {
+  raw.forEach(function (line) {
     if ((line.indexOf(" ") === 0 || line.indexOf("\t") === 0) && out.length) {
       out[out.length - 1] += line.substring(1);
     } else {
@@ -480,7 +560,7 @@ function parseIcsDate_(prop, fallbackTz) {
   if (valueType === "DATE" || /^\d{8}$/.test(value)) {
     return {
       type: "date",
-      date: value.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")
+      date: value.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3"),
     };
   }
 
@@ -489,13 +569,25 @@ function parseIcsDate_(prop, fallbackTz) {
 
   const sec = m[6] || "00";
   const hasZ = !!m[7];
-  const dateTime = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + sec + (hasZ ? "Z" : "");
+  const dateTime =
+    m[1] +
+    "-" +
+    m[2] +
+    "-" +
+    m[3] +
+    "T" +
+    m[4] +
+    ":" +
+    m[5] +
+    ":" +
+    sec +
+    (hasZ ? "Z" : "");
   const tzid = prop.params.TZID || fallbackTz || null;
 
   return {
     type: "dateTime",
     dateTime: dateTime,
-    timeZone: hasZ ? null : tzid
+    timeZone: hasZ ? null : tzid,
   };
 }
 
@@ -512,11 +604,15 @@ function defaultEndFromStart_(start) {
   if (start.dateTime.slice(-1) === "Z") {
     const d = new Date(start.dateTime);
     d.setHours(d.getHours() + 1);
-    return { type: "dateTime", dateTime: d.toISOString().replace(".000Z", "Z"), timeZone: null };
+    return {
+      type: "dateTime",
+      dateTime: d.toISOString().replace(".000Z", "Z"),
+      timeZone: null,
+    };
   }
 
   const m = start.dateTime.match(
-    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/,
   );
   const d = new Date(
     Number(m[1]),
@@ -524,14 +620,14 @@ function defaultEndFromStart_(start) {
     Number(m[3]),
     Number(m[4]),
     Number(m[5]),
-    Number(m[6])
+    Number(m[6]),
   );
   d.setHours(d.getHours() + 1);
 
   return {
     type: "dateTime",
     dateTime: formatLocalDateTime_(d),
-    timeZone: start.timeZone || null
+    timeZone: start.timeZone || null,
   };
 }
 
@@ -576,19 +672,42 @@ function recurrenceEnded_(recurrenceLines, cutoffDate) {
  */
 function parseUntilDate_(untilRaw) {
   if (/^\d{8}$/.test(untilRaw)) {
-    return new Date(untilRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3T23:59:59"));
+    return new Date(
+      untilRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3T23:59:59"),
+    );
   }
-  const m = untilRaw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/);
+  const m = untilRaw.match(
+    /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/,
+  );
   if (!m) return null;
   const sec = m[6] || "00";
-  const iso = m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + sec + (m[7] ? "Z" : "");
+  const iso =
+    m[1] +
+    "-" +
+    m[2] +
+    "-" +
+    m[3] +
+    "T" +
+    m[4] +
+    ":" +
+    m[5] +
+    ":" +
+    sec +
+    (m[7] ? "Z" : "");
   return new Date(iso);
 }
 
 /**
  * Builds the Calendar API event resource used for initial event creation.
  */
-function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbackTz) {
+function buildEventResource_(
+  evt,
+  feedUrl,
+  feedHash,
+  syncKey,
+  attendees,
+  fallbackTz,
+) {
   const resource = {
     summary: evt.summary || "(No title)",
     description: evt.description || "",
@@ -599,7 +718,7 @@ function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbac
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
-    attendees: attendees.map(function(email) {
+    attendees: attendees.map(function (email) {
       return { email: email };
     }),
     extendedProperties: {
@@ -608,9 +727,9 @@ function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbac
         sourceFeed: feedHash,
         sourceUrl: feedUrl,
         sourceUid: evt.uid,
-        syncKey: syncKey
-      }
-    }
+        syncKey: syncKey,
+      },
+    },
   };
 
   if (evt.recurrence && evt.recurrence.length) {
@@ -623,7 +742,14 @@ function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbac
 /**
  * Builds the Calendar API patch resource used to force existing events back to feed state.
  */
-function buildEventPatchResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbackTz) {
+function buildEventPatchResource_(
+  evt,
+  feedUrl,
+  feedHash,
+  syncKey,
+  attendees,
+  fallbackTz,
+) {
   const resource = {
     summary: evt.summary || "(No title)",
     description: evt.description || "",
@@ -634,7 +760,7 @@ function buildEventPatchResource_(evt, feedUrl, feedHash, syncKey, attendees, fa
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
-    attendees: attendees.map(function(email) {
+    attendees: attendees.map(function (email) {
       return { email: email };
     }),
     extendedProperties: {
@@ -643,13 +769,14 @@ function buildEventPatchResource_(evt, feedUrl, feedHash, syncKey, attendees, fa
         sourceFeed: feedHash,
         sourceUrl: feedUrl,
         sourceUid: evt.uid,
-        syncKey: syncKey
-      }
-    }
+        syncKey: syncKey,
+      },
+    },
   };
 
   // Explicitly include recurrence in patches so existing recurring state is replaced by upstream truth.
-  resource.recurrence = evt.recurrence && evt.recurrence.length ? evt.recurrence.slice() : [];
+  resource.recurrence =
+    evt.recurrence && evt.recurrence.length ? evt.recurrence.slice() : [];
 
   return resource;
 }
@@ -681,7 +808,7 @@ function computeEventHash_(evt, attendees) {
     start: evt.start || null,
     end: evt.end || null,
     recurrence: (evt.recurrence || []).slice().sort(),
-    attendees: attendees.slice().sort()
+    attendees: attendees.slice().sort(),
   };
   return sha256Hex_(JSON.stringify(normalized));
 }
@@ -707,9 +834,13 @@ function buildDriveSyncKey_(sourceSyncKey) {
 function buildDriveOptions_(cfg, mapping) {
   return {
     enabled: !!mapping.addDriveTimePlaceholders,
-    originAddress: (mapping.originAddress || cfg.defaultOriginAddress || "").trim(),
+    originAddress: (
+      mapping.originAddress ||
+      cfg.defaultOriginAddress ||
+      ""
+    ).trim(),
     minDriveMinutesToCreate: cfg.minDriveMinutesToCreate,
-    titleTemplate: cfg.driveEventTitleTemplate
+    titleTemplate: cfg.driveEventTitleTemplate,
   };
 }
 
@@ -726,11 +857,11 @@ function loadExistingEventsByKey_(calendarId, feedHash) {
       showDeleted: false,
       singleEvents: false,
       maxResults: 2500,
-      pageToken: pageToken
+      pageToken: pageToken,
     });
 
-    (resp.items || []).forEach(function(ev) {
-      const key = ((((ev.extendedProperties || {}).private) || {}).syncKey) || "";
+    (resp.items || []).forEach(function (ev) {
+      const key = ((ev.extendedProperties || {}).private || {}).syncKey || "";
       if (key && !isDriveSyncKey_(key)) out[key] = ev;
     });
 
@@ -753,11 +884,11 @@ function loadExistingDriveEventsByKey_(calendarId, feedHash) {
       showDeleted: false,
       singleEvents: false,
       maxResults: 2500,
-      pageToken: pageToken
+      pageToken: pageToken,
     });
 
-    (resp.items || []).forEach(function(ev) {
-      const key = ((((ev.extendedProperties || {}).private) || {}).syncKey) || "";
+    (resp.items || []).forEach(function (ev) {
+      const key = ((ev.extendedProperties || {}).private || {}).syncKey || "";
       if (key && isDriveSyncKey_(key)) out[key] = ev;
     });
 
@@ -782,7 +913,7 @@ function reconcileDrivePlaceholder_(
   seenDrive,
   today,
   stats,
-  driveDurationCache
+  driveDurationCache,
 ) {
   const destination = (evt.location || "").trim();
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
@@ -796,7 +927,7 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "drive placeholders disabled"
+      "drive placeholders disabled",
     );
     return;
   }
@@ -817,14 +948,16 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "source event is all-day"
+      "source event is all-day",
     );
     return;
   }
 
   if (!destination) {
     stats.driveSkipped++;
-    console.info("[SKIP] Drive placeholder ignored because source event has no location");
+    console.info(
+      "[SKIP] Drive placeholder ignored because source event has no location",
+    );
     maybeDeleteDrivePlaceholder_(
       mapping,
       feedHash,
@@ -832,14 +965,16 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "source event has no location"
+      "source event has no location",
     );
     return;
   }
 
   if (!driveOpts.originAddress) {
     stats.driveSkipped++;
-    console.info("[SKIP] Drive placeholder ignored because no default origin address is configured");
+    console.info(
+      "[SKIP] Drive placeholder ignored because no default origin address is configured",
+    );
     maybeDeleteDrivePlaceholder_(
       mapping,
       feedHash,
@@ -847,7 +982,7 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "missing origin address"
+      "missing origin address",
     );
     return;
   }
@@ -855,7 +990,9 @@ function reconcileDrivePlaceholder_(
   const sourceStart = getSourceEventStartDate_(syncedEvent);
   if (!sourceStart) {
     stats.driveSkipped++;
-    console.info("[SKIP] Drive placeholder ignored because source start time is unavailable");
+    console.info(
+      "[SKIP] Drive placeholder ignored because source start time is unavailable",
+    );
     maybeDeleteDrivePlaceholder_(
       mapping,
       feedHash,
@@ -863,15 +1000,21 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "source start time unavailable"
+      "source start time unavailable",
     );
     return;
   }
 
-  const driveMinutes = getDriveMinutes_(driveOpts.originAddress, destination, driveDurationCache);
+  const driveMinutes = getDriveMinutes_(
+    driveOpts.originAddress,
+    destination,
+    driveDurationCache,
+  );
   if (driveMinutes === null) {
     stats.driveSkipped++;
-    console.info("[SKIP] Drive placeholder ignored because route lookup failed");
+    console.info(
+      "[SKIP] Drive placeholder ignored because route lookup failed",
+    );
     maybeDeleteDrivePlaceholder_(
       mapping,
       feedHash,
@@ -879,7 +1022,7 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "route lookup failed"
+      "route lookup failed",
     );
     return;
   }
@@ -891,7 +1034,7 @@ function reconcileDrivePlaceholder_(
         driveMinutes +
         "m) is <= threshold (" +
         driveOpts.minDriveMinutesToCreate +
-        "m)"
+        "m)",
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -900,14 +1043,18 @@ function reconcileDrivePlaceholder_(
       existingDriveByKey,
       today,
       stats,
-      "drive time below threshold"
+      "drive time below threshold",
     );
     return;
   }
 
   const driveEnd = sourceStart;
   const driveStart = new Date(driveEnd.getTime() - driveMinutes * 60 * 1000);
-  const driveTitle = renderDriveEventTitle_(driveOpts.titleTemplate, evt, driveMinutes);
+  const driveTitle = renderDriveEventTitle_(
+    driveOpts.titleTemplate,
+    evt,
+    driveMinutes,
+  );
   const driveHash = computeDrivePlaceholderHash_(
     sourceSyncKey,
     syncedEvent.id,
@@ -915,7 +1062,7 @@ function reconcileDrivePlaceholder_(
     destination,
     driveStart,
     driveEnd,
-    driveTitle
+    driveTitle,
   );
   const driveResource = buildDrivePlaceholderResource_(
     mapping,
@@ -928,26 +1075,36 @@ function reconcileDrivePlaceholder_(
     driveStart,
     driveEnd,
     driveHash,
-    driveOpts.originAddress
+    driveOpts.originAddress,
   );
   seenDrive[driveSyncKey] = true;
 
   if (!existingDrive) {
-    Calendar.Events.insert(driveResource, mapping.calendarId, { sendUpdates: "none" });
+    Calendar.Events.insert(driveResource, mapping.calendarId, {
+      sendUpdates: "none",
+    });
     stats.driveCreated++;
-    console.log("[CREATE] Drive placeholder for source event " + syncedEvent.id);
+    console.log(
+      "[CREATE] Drive placeholder for source event " + syncedEvent.id,
+    );
     return;
   }
 
   if (!isManagedDriveEventForFeed_(existingDrive, mapping.feedUrl, feedHash)) {
     stats.driveSkipped++;
-    console.info("[SKIP] Not updating unmanaged drive placeholder " + existingDrive.id);
+    console.info(
+      "[SKIP] Not updating unmanaged drive placeholder " + existingDrive.id,
+    );
     return;
   }
 
-  Calendar.Events.patch(driveResource, mapping.calendarId, existingDrive.id, { sendUpdates: "none" });
+  Calendar.Events.patch(driveResource, mapping.calendarId, existingDrive.id, {
+    sendUpdates: "none",
+  });
   stats.driveUpdated++;
-  console.log("[UPDATE] Drive placeholder " + existingDrive.id + " (forced resync)");
+  console.log(
+    "[UPDATE] Drive placeholder " + existingDrive.id + " (forced resync)",
+  );
 }
 
 /**
@@ -960,24 +1117,27 @@ function maybeDeleteDrivePlaceholder_(
   existingDriveByKey,
   today,
   stats,
-  reason
+  reason,
 ) {
   const existingDrive = existingDriveByKey[driveSyncKey];
   if (!existingDrive) return;
-  if (!isManagedDriveEventForFeed_(existingDrive, mapping.feedUrl, feedHash)) return;
+  if (!isManagedDriveEventForFeed_(existingDrive, mapping.feedUrl, feedHash))
+    return;
   if (!isFutureEventResource_(existingDrive, today)) return;
 
   Calendar.Events.remove(mapping.calendarId, existingDrive.id);
   delete existingDriveByKey[driveSyncKey];
   stats.driveDeleted++;
-  console.log("[DELETE] Drive placeholder " + existingDrive.id + " (" + reason + ")");
+  console.log(
+    "[DELETE] Drive placeholder " + existingDrive.id + " (" + reason + ")",
+  );
 }
 
 /**
  * Verifies an event is owned by this script for this specific feed mapping.
  */
 function isManagedEventForFeed_(ev, feedUrl, feedHash) {
-  const p = ((ev.extendedProperties || {}).private) || {};
+  const p = (ev.extendedProperties || {}).private || {};
   if (!p.syncKey || typeof p.syncKey !== "string") return false;
   if (p.syncKey.indexOf(feedHash + ":") !== 0) return false;
   if (p.managedKind && p.managedKind !== "source") return false;
@@ -991,7 +1151,7 @@ function isManagedEventForFeed_(ev, feedUrl, feedHash) {
  * Verifies a drive placeholder is managed by this script for this feed.
  */
 function isManagedDriveEventForFeed_(ev, feedUrl, feedHash) {
-  const p = ((ev.extendedProperties || {}).private) || {};
+  const p = (ev.extendedProperties || {}).private || {};
   if (!p.syncKey || typeof p.syncKey !== "string") return false;
   if (!isDriveSyncKey_(p.syncKey)) return false;
   if (p.managedKind && p.managedKind !== "drive") return false;
@@ -1059,7 +1219,8 @@ function isAllDayEvent_(evt) {
  * Extracts a JavaScript Date for the source calendar event start dateTime.
  */
 function getSourceEventStartDate_(sourceEvent) {
-  if (!sourceEvent || !sourceEvent.start || !sourceEvent.start.dateTime) return null;
+  if (!sourceEvent || !sourceEvent.start || !sourceEvent.start.dateTime)
+    return null;
   const d = new Date(sourceEvent.start.dateTime);
   if (isNaN(d.getTime())) return null;
   return d;
@@ -1082,7 +1243,14 @@ function getDriveMinutes_(originAddress, destinationAddress, cache) {
     cache[key] = minutes;
     return minutes;
   } catch (e) {
-    console.error("[ERROR] Drive lookup failed from \"" + originAddress + "\" to \"" + destinationAddress + "\": " + String(e));
+    console.error(
+      '[ERROR] Drive lookup failed from "' +
+        originAddress +
+        '" to "' +
+        destinationAddress +
+        '": ' +
+        String(e),
+    );
     cache[key] = null;
     return null;
   }
@@ -1124,15 +1292,20 @@ function buildDrivePlaceholderResource_(
   driveStart,
   driveEnd,
   driveHash,
-  originAddress
+  originAddress,
 ) {
   return {
     summary: driveTitle,
     description:
       "Managed drive-time placeholder.\n" +
-      "From: " + originAddress + "\n" +
-      "To: " + (evt.location || "") + "\n" +
-      "Source event: " + sourceEventId,
+      "From: " +
+      originAddress +
+      "\n" +
+      "To: " +
+      (evt.location || "") +
+      "\n" +
+      "Source event: " +
+      sourceEventId,
     location: evt.location || "",
     start: { dateTime: driveStart.toISOString() },
     end: { dateTime: driveEnd.toISOString() },
@@ -1149,9 +1322,9 @@ function buildDrivePlaceholderResource_(
         syncKey: driveSyncKey,
         sourceSyncKey: sourceSyncKey,
         sourceEventId: sourceEventId,
-        syncHash: driveHash
-      }
-    }
+        syncHash: driveHash,
+      },
+    },
   };
 }
 
@@ -1165,7 +1338,7 @@ function computeDrivePlaceholderHash_(
   destinationAddress,
   driveStart,
   driveEnd,
-  driveTitle
+  driveTitle,
 ) {
   return sha256Hex_(
     JSON.stringify({
@@ -1175,8 +1348,8 @@ function computeDrivePlaceholderHash_(
       destinationAddress: destinationAddress,
       driveStart: driveStart.toISOString(),
       driveEnd: driveEnd.toISOString(),
-      driveTitle: driveTitle
-    })
+      driveTitle: driveTitle,
+    }),
   );
 }
 
@@ -1195,9 +1368,15 @@ function parsedDateToDate_(parsed) {
 function uniqueEmails_(emails) {
   const s = {};
   emails
-    .map(function(e) { return (e || "").trim().toLowerCase(); })
-    .filter(function(e) { return !!e; })
-    .forEach(function(e) { s[e] = true; });
+    .map(function (e) {
+      return (e || "").trim().toLowerCase();
+    })
+    .filter(function (e) {
+      return !!e;
+    })
+    .forEach(function (e) {
+      s[e] = true;
+    });
   return Object.keys(s);
 }
 
@@ -1228,10 +1407,10 @@ function sha256Hex_(input) {
   const bytes = Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
     input,
-    Utilities.Charset.UTF_8
+    Utilities.Charset.UTF_8,
   );
   return bytes
-    .map(function(b) {
+    .map(function (b) {
       const v = (b + 256) % 256;
       return (v < 16 ? "0" : "") + v.toString(16);
     })
@@ -1242,7 +1421,9 @@ function sha256Hex_(input) {
  * Formats a Date into YYYY-MM-DD (local clock).
  */
 function formatYmd_(d) {
-  const p = function(n) { return n < 10 ? "0" + n : "" + n; };
+  const p = function (n) {
+    return n < 10 ? "0" + n : "" + n;
+  };
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
 }
 
@@ -1250,14 +1431,21 @@ function formatYmd_(d) {
  * Formats a Date into YYYY-MM-DDTHH:mm:ss (local clock, no timezone suffix).
  */
 function formatLocalDateTime_(d) {
-  const p = function(n) { return n < 10 ? "0" + n : "" + n; };
+  const p = function (n) {
+    return n < 10 ? "0" + n : "" + n;
+  };
   return (
     d.getFullYear() +
-    "-" + p(d.getMonth() + 1) +
-    "-" + p(d.getDate()) +
-    "T" + p(d.getHours()) +
-    ":" + p(d.getMinutes()) +
-    ":" + p(d.getSeconds())
+    "-" +
+    p(d.getMonth() + 1) +
+    "-" +
+    p(d.getDate()) +
+    "T" +
+    p(d.getHours()) +
+    ":" +
+    p(d.getMinutes()) +
+    ":" +
+    p(d.getSeconds())
   );
 }
 
@@ -1287,7 +1475,7 @@ function logCalendarIdsOnFirstRun_() {
 function logAllCalendarIds_() {
   const calendars = CalendarApp.getAllCalendars();
   console.log("[SETUP] Accessible calendars: " + calendars.length);
-  calendars.forEach(function(cal) {
+  calendars.forEach(function (cal) {
     console.log("[SETUP] " + cal.getName() + " => " + cal.getId());
   });
 }
