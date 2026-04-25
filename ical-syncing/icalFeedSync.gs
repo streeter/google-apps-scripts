@@ -126,6 +126,7 @@ function syncOneFeed_(cfg, mapping, today) {
       ? mapping.attendeeEmails
       : cfg.defaultAttendeeEmails) || [],
   );
+  const sourceAttendees = buildSourceAttendees_(attendees);
   const driveOpts = buildDriveOptions_(cfg, mapping);
   const driveDurationCache = {};
   console.log('[FEED] Processing "' + feedName + '" -> ' + mapping.calendarId);
@@ -256,12 +257,12 @@ function syncOneFeed_(cfg, mapping, today) {
       mapping.feedUrl,
       feedHash,
       syncKey,
-      attendees,
+      sourceAttendees,
       parsed.calendarTimezone,
     );
 
-    const newHash = computeEventHash_(effectiveEvt, attendees);
-    createResource.extendedProperties.private.syncHash = newHash;
+    const createHash = computeEventHash_(effectiveEvt, sourceAttendees);
+    createResource.extendedProperties.private.syncHash = createHash;
 
     if (!existing) {
       const inserted = Calendar.Events.insert(
@@ -321,18 +322,23 @@ function syncOneFeed_(cfg, mapping, today) {
       return;
     }
 
+    const existingDeclined = isCurrentUserDeclinedEvent_(existing);
+    const patchAttendees = existingDeclined
+      ? buildDeclinedAttendees_(existing)
+      : sourceAttendees;
     const oldHash =
       ((existing.extendedProperties || {}).private || {}).syncHash || "";
-    const changedFromLastFeedState = oldHash !== newHash;
+    const patchHash = computeEventHash_(effectiveEvt, patchAttendees);
+    const changedFromLastFeedState = oldHash !== patchHash;
     const patchResource = buildEventPatchResource_(
       effectiveEvt,
       mapping.feedUrl,
       feedHash,
       syncKey,
-      attendees,
+      patchAttendees,
       parsed.calendarTimezone,
     );
-    patchResource.extendedProperties.private.syncHash = newHash;
+    patchResource.extendedProperties.private.syncHash = patchHash;
     const patched = Calendar.Events.patch(
       patchResource,
       mapping.calendarId,
@@ -356,6 +362,32 @@ function syncOneFeed_(cfg, mapping, today) {
           existing.id +
           ", forced resync)",
       );
+    }
+    if (existingDeclined) {
+      console.info(
+        '[DECLINE] Preserving local decline for "' +
+          (effectiveEvt.summary || "(No title)") +
+          '" and removing managed placeholders',
+      );
+      maybeDeleteArrivalPlaceholder_(
+        mapping,
+        feedHash,
+        arrivalSyncKey,
+        existingArrivalByKey,
+        today,
+        stats,
+        "source event declined",
+      );
+      maybeDeleteDrivePlaceholder_(
+        mapping,
+        feedHash,
+        driveSyncKey,
+        existingDriveByKey,
+        today,
+        stats,
+        "source event declined",
+      );
+      return;
     }
     const arrivalAnchorStart = reconcileArrivalPlaceholder_(
       effectiveEvt,
@@ -879,8 +911,8 @@ function buildEventResource_(
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
-    attendees: attendees.map(function (email) {
-      return { email: email };
+    attendees: attendees.map(function (attendee) {
+      return toCalendarAttendeeResource_(attendee);
     }),
     extendedProperties: {
       private: {
@@ -921,8 +953,8 @@ function buildEventPatchResource_(
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
-    attendees: attendees.map(function (email) {
-      return { email: email };
+    attendees: attendees.map(function (attendee) {
+      return toCalendarAttendeeResource_(attendee);
     }),
     extendedProperties: {
       private: {
@@ -1051,6 +1083,16 @@ function buildPlaceNameAddressRules_(cfg, mapping) {
     .sort(function (a, b) {
       return b.placeName.length - a.placeName.length;
     });
+}
+
+/**
+ * Returns source-event attendees with the current user added, so synced events can be declined locally.
+ */
+function buildSourceAttendees_(attendees) {
+  const emails = uniqueEmails_(
+    (attendees || []).concat([getCurrentUserEmail_()]),
+  );
+  return emails;
 }
 
 /**
@@ -2165,8 +2207,8 @@ function buildDrivePlaceholderResource_(
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
-    attendees: (attendees || []).map(function (email) {
-      return { email: email };
+    attendees: (attendees || []).map(function (attendee) {
+      return toCalendarAttendeeResource_(attendee);
     }),
     extendedProperties: {
       private: {
@@ -2219,8 +2261,8 @@ function buildArrivalPlaceholderResource_(
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
-    attendees: (attendees || []).map(function (email) {
-      return { email: email };
+    attendees: (attendees || []).map(function (attendee) {
+      return toCalendarAttendeeResource_(attendee);
     }),
     extendedProperties: {
       private: {
@@ -2321,6 +2363,94 @@ function uniqueEmails_(emails) {
       s[e] = true;
     });
   return Object.keys(s);
+}
+
+/**
+ * Converts an attendee value into the Calendar API attendee resource shape.
+ */
+function toCalendarAttendeeResource_(attendee) {
+  if (!attendee) return { email: "" };
+  if (typeof attendee === "string") {
+    return { email: attendee };
+  }
+
+  const resource = { email: String(attendee.email || "") };
+  if (attendee.responseStatus)
+    resource.responseStatus = String(attendee.responseStatus);
+  if (attendee.self) resource.self = true;
+  return resource;
+}
+
+/**
+ * Returns the current user's email if Apps Script exposes it.
+ */
+function getCurrentUserEmail_() {
+  const candidates = [];
+  try {
+    candidates.push(Session.getEffectiveUser().getEmail());
+  } catch (e) {}
+  try {
+    candidates.push(Session.getActiveUser().getEmail());
+  } catch (e) {}
+  for (let i = 0; i < candidates.length; i++) {
+    const email = String(candidates[i] || "")
+      .trim()
+      .toLowerCase();
+    if (email) return email;
+  }
+  return "";
+}
+
+/**
+ * Returns true when the current user's attendee entry is marked declined.
+ */
+function isCurrentUserDeclinedEvent_(ev) {
+  return !!getCurrentUserAttendee_(ev, "declined");
+}
+
+/**
+ * Returns the current user's attendee entry when it matches the requested status.
+ */
+function getCurrentUserAttendee_(ev, responseStatus) {
+  const attendees = (ev && ev.attendees) || [];
+  const currentUser = getCurrentUserEmail_();
+  const targetEmail = currentUser ? currentUser.toLowerCase() : "";
+  for (let i = 0; i < attendees.length; i++) {
+    const attendee = attendees[i];
+    if (!attendee) continue;
+    const email = String(attendee.email || "")
+      .trim()
+      .toLowerCase();
+    const matchesSelf =
+      !!attendee.self || (targetEmail && email === targetEmail);
+    if (!matchesSelf) continue;
+    if (
+      responseStatus &&
+      String(attendee.responseStatus || "").toLowerCase() !== responseStatus
+    ) {
+      continue;
+    }
+    return attendee;
+  }
+  return null;
+}
+
+/**
+ * Keeps only the current user's attendee entry and marks it declined.
+ */
+function buildDeclinedAttendees_(ev) {
+  const selfAttendee = getCurrentUserAttendee_(ev, null);
+  const email =
+    selfAttendee && selfAttendee.email
+      ? String(selfAttendee.email).trim().toLowerCase()
+      : getCurrentUserEmail_();
+  if (!email) return [];
+  const declined = {
+    email: email,
+    responseStatus: "declined",
+  };
+  if (selfAttendee && selfAttendee.self) declined.self = true;
+  return [declined];
 }
 
 /**
