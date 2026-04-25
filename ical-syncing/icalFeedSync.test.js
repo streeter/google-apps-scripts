@@ -335,6 +335,89 @@ test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () 
   assert.equal(ctx.extractArrivalLeadMinutes_("No arrival guidance"), null);
 });
 
+test("resolveDrivePlan_ prefers previous event location and skips short/no-op drives", () => {
+  const ctx = loadIcalSyncContext();
+  const driveOpts = {
+    originAddress: "123 Main St, Brooklyn, NY",
+    minDriveMinutesToCreate: 10,
+  };
+  const driveEnd = new Date("2099-05-01T15:00:00Z");
+
+  ctx.findPreviousDriveOriginEvent_ = () => ({
+    id: "prev-1",
+    location: "Gym A",
+  });
+  let plan = ctx.resolveDrivePlan_(
+    "calendar-1",
+    "source-1",
+    driveEnd,
+    "Gym A",
+    driveOpts,
+    {},
+  );
+  assert.match(plan.skipReason, /already at destination/);
+
+  ctx.findPreviousDriveOriginEvent_ = () => ({
+    id: "prev-2",
+    location: "Nearby Gym",
+  });
+  ctx.getDriveMinutes_ = (origin) => (origin === "Nearby Gym" ? 10 : 30);
+  plan = ctx.resolveDrivePlan_(
+    "calendar-1",
+    "source-1",
+    driveEnd,
+    "Main Field",
+    driveOpts,
+    {},
+  );
+  assert.match(plan.skipReason, /within threshold/);
+
+  ctx.findPreviousDriveOriginEvent_ = () => ({
+    id: "prev-3",
+    location: "Far Gym",
+  });
+  ctx.getDriveMinutes_ = (origin) => (origin === "Far Gym" ? 25 : 30);
+  plan = ctx.resolveDrivePlan_(
+    "calendar-1",
+    "source-1",
+    driveEnd,
+    "Main Field",
+    driveOpts,
+    {},
+  );
+  assert.equal(plan.originAddress, "Far Gym");
+  assert.equal(plan.driveMinutes, 25);
+  assert.equal(plan.previousEventId, "prev-3");
+});
+
+test("resolveDrivePlan_ falls back to default origin when previous route lookup fails", () => {
+  const ctx = loadIcalSyncContext();
+  const driveOpts = {
+    originAddress: "123 Main St, Brooklyn, NY",
+    minDriveMinutesToCreate: 10,
+  };
+  const driveEnd = new Date("2099-05-01T15:00:00Z");
+
+  ctx.findPreviousDriveOriginEvent_ = () => ({
+    id: "prev-1",
+    location: "Unroutable",
+  });
+  ctx.getDriveMinutes_ = (origin) => (origin === "Unroutable" ? null : 30);
+
+  const plan = ctx.resolveDrivePlan_(
+    "calendar-1",
+    "source-1",
+    driveEnd,
+    "Main Field",
+    driveOpts,
+    {},
+  );
+
+  assert.equal(plan.originAddress, "123 Main St, Brooklyn, NY");
+  assert.equal(plan.driveMinutes, 30);
+  assert.equal(plan.previousEventId, "");
+});
+
 test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > threshold", () => {
   const ctx = loadIcalSyncContext();
   const inserted = [];
@@ -396,6 +479,8 @@ test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > t
     today,
     statsAtThreshold,
     {},
+    null,
+    [],
   );
   assert.equal(statsAtThreshold.driveCreated, 0);
   assert.equal(statsAtThreshold.driveSkipped, 1);
@@ -416,6 +501,8 @@ test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > t
     today,
     statsAboveThreshold,
     {},
+    null,
+    [],
   );
   assert.equal(statsAboveThreshold.driveCreated, 1);
   assert.equal(inserted.length, 1);
@@ -437,6 +524,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
     driveEnd,
     "drivehash123",
     "Origin Address",
+    ["a@example.com", "b@example.com"],
   );
 
   const p = resource.extendedProperties.private;
@@ -444,6 +532,10 @@ test("drive placeholder resource carries source linkage metadata", () => {
   assert.equal(p.sourceSyncKey, "feedhash123:source-sync");
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.syncKey, "drive:feedhash123:source-sync");
+  assert.equal(
+    JSON.stringify(resource.attendees),
+    JSON.stringify([{ email: "a@example.com" }, { email: "b@example.com" }]),
+  );
 });
 
 test("arrival placeholder resource carries source linkage metadata", () => {
@@ -462,6 +554,7 @@ test("arrival placeholder resource carries source linkage metadata", () => {
     arrivalEnd,
     "arrivalhash123",
     30,
+    ["a@example.com", "b@example.com"],
   );
 
   const p = resource.extendedProperties.private;
@@ -470,6 +563,10 @@ test("arrival placeholder resource carries source linkage metadata", () => {
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.arrivalMinutes, "30");
   assert.equal(p.syncKey, "arrival:feedhash123:source-sync");
+  assert.equal(
+    JSON.stringify(resource.attendees),
+    JSON.stringify([{ email: "a@example.com" }, { email: "b@example.com" }]),
+  );
 });
 
 test("syncOneFeed_ creates source event and tied drive placeholder", () => {
@@ -520,7 +617,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
 
   const cfg = {
     deleteMissingFromFeed: false,
-    defaultAttendeeEmails: [],
+    defaultAttendeeEmails: ["coach@example.com", "parent@example.com"],
     addDriveTimePlaceholders: false,
     defaultOriginAddress: "New York, NY",
     minDriveMinutesToCreate: 10,
@@ -625,7 +722,7 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
 
   const cfg = {
     deleteMissingFromFeed: false,
-    defaultAttendeeEmails: [],
+    defaultAttendeeEmails: ["coach@example.com", "parent@example.com"],
     addDriveTimePlaceholders: false,
     defaultOriginAddress: "New York, NY",
     minDriveMinutesToCreate: 10,
@@ -675,4 +772,18 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   assert.equal(arrival.end.dateTime, "2099-05-01T15:30:00.000Z");
   assert.equal(drive.end.dateTime, "2099-05-01T15:00:00.000Z");
   assert.equal(drive.start.dateTime, "2099-05-01T14:35:00.000Z");
+  assert.equal(
+    JSON.stringify(arrival.attendees),
+    JSON.stringify([
+      { email: "coach@example.com" },
+      { email: "parent@example.com" },
+    ]),
+  );
+  assert.equal(
+    JSON.stringify(drive.attendees),
+    JSON.stringify([
+      { email: "coach@example.com" },
+      { email: "parent@example.com" },
+    ]),
+  );
 });

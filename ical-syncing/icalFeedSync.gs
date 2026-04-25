@@ -282,6 +282,7 @@ function syncOneFeed_(cfg, mapping, today) {
         seenArrival,
         today,
         stats,
+        attendees,
       );
       reconcileDrivePlaceholder_(
         effectiveEvt,
@@ -297,6 +298,7 @@ function syncOneFeed_(cfg, mapping, today) {
         stats,
         driveDurationCache,
         arrivalAnchorStart,
+        attendees,
       );
       return;
     }
@@ -354,6 +356,7 @@ function syncOneFeed_(cfg, mapping, today) {
       seenArrival,
       today,
       stats,
+      attendees,
     );
     reconcileDrivePlaceholder_(
       effectiveEvt,
@@ -369,6 +372,7 @@ function syncOneFeed_(cfg, mapping, today) {
       stats,
       driveDurationCache,
       arrivalAnchorStart,
+      attendees,
     );
   });
 
@@ -1065,6 +1069,7 @@ function reconcileArrivalPlaceholder_(
   seenArrival,
   today,
   stats,
+  attendees,
 ) {
   const existingArrival = existingArrivalByKey[arrivalSyncKey] || null;
 
@@ -1149,6 +1154,7 @@ function reconcileArrivalPlaceholder_(
     arrivalEnd,
     arrivalHash,
     arrivalMinutes,
+    attendees,
   );
   seenArrival[arrivalSyncKey] = true;
 
@@ -1232,6 +1238,7 @@ function reconcileDrivePlaceholder_(
   stats,
   driveDurationCache,
   arrivalAnchorStart,
+  attendees,
 ) {
   const destination = (evt.location || "").trim();
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
@@ -1288,23 +1295,6 @@ function reconcileDrivePlaceholder_(
     return;
   }
 
-  if (!driveOpts.originAddress) {
-    stats.driveSkipped++;
-    console.info(
-      "[SKIP] Drive placeholder ignored because no default origin address is configured",
-    );
-    maybeDeleteDrivePlaceholder_(
-      mapping,
-      feedHash,
-      driveSyncKey,
-      existingDriveByKey,
-      today,
-      stats,
-      "missing origin address",
-    );
-    return;
-  }
-
   const sourceStart = getSourceEventStartDate_(syncedEvent);
   if (!sourceStart) {
     stats.driveSkipped++;
@@ -1323,55 +1313,39 @@ function reconcileDrivePlaceholder_(
     return;
   }
 
-  const driveMinutes = getDriveMinutes_(
-    driveOpts.originAddress,
-    destination,
-    driveDurationCache,
-  );
-  if (driveMinutes === null) {
-    stats.driveSkipped++;
-    console.info(
-      "[SKIP] Drive placeholder ignored because route lookup failed",
-    );
-    maybeDeleteDrivePlaceholder_(
-      mapping,
-      feedHash,
-      driveSyncKey,
-      existingDriveByKey,
-      today,
-      stats,
-      "route lookup failed",
-    );
-    return;
-  }
-
-  if (driveMinutes <= driveOpts.minDriveMinutesToCreate) {
-    stats.driveSkipped++;
-    console.info(
-      "[SKIP] Drive placeholder ignored because drive time (" +
-        driveMinutes +
-        "m) is <= threshold (" +
-        driveOpts.minDriveMinutesToCreate +
-        "m)",
-    );
-    maybeDeleteDrivePlaceholder_(
-      mapping,
-      feedHash,
-      driveSyncKey,
-      existingDriveByKey,
-      today,
-      stats,
-      "drive time below threshold",
-    );
-    return;
-  }
-
   const driveEnd =
     arrivalAnchorStart instanceof Date &&
     !isNaN(arrivalAnchorStart.getTime()) &&
     arrivalAnchorStart.getTime() < sourceStart.getTime()
       ? arrivalAnchorStart
       : sourceStart;
+  const drivePlan = resolveDrivePlan_(
+    mapping.calendarId,
+    syncedEvent.id,
+    driveEnd,
+    destination,
+    driveOpts,
+    driveDurationCache,
+  );
+  if (drivePlan.skipReason) {
+    stats.driveSkipped++;
+    console.info(
+      "[SKIP] Drive placeholder ignored because " + drivePlan.skipReason,
+    );
+    maybeDeleteDrivePlaceholder_(
+      mapping,
+      feedHash,
+      driveSyncKey,
+      existingDriveByKey,
+      today,
+      stats,
+      drivePlan.skipReason,
+    );
+    return;
+  }
+
+  const driveMinutes = drivePlan.driveMinutes;
+  const driveOrigin = drivePlan.originAddress;
   const driveStart = new Date(driveEnd.getTime() - driveMinutes * 60 * 1000);
   const driveTitle = renderDriveEventTitle_(
     driveOpts.titleTemplate,
@@ -1381,7 +1355,7 @@ function reconcileDrivePlaceholder_(
   const driveHash = computeDrivePlaceholderHash_(
     sourceSyncKey,
     syncedEvent.id,
-    driveOpts.originAddress,
+    driveOrigin,
     destination,
     driveStart,
     driveEnd,
@@ -1398,7 +1372,9 @@ function reconcileDrivePlaceholder_(
     driveStart,
     driveEnd,
     driveHash,
-    driveOpts.originAddress,
+    driveOrigin,
+    attendees,
+    drivePlan.previousEventId || "",
   );
   seenDrive[driveSyncKey] = true;
 
@@ -1600,6 +1576,164 @@ function getSourceEventStartDate_(sourceEvent) {
 }
 
 /**
+ * Chooses drive origin + duration using prior calendar context, then default origin fallback.
+ */
+function resolveDrivePlan_(
+  calendarId,
+  sourceEventId,
+  driveEnd,
+  destination,
+  driveOpts,
+  driveDurationCache,
+) {
+  const previousEvent = findPreviousDriveOriginEvent_(
+    calendarId,
+    driveEnd,
+    sourceEventId,
+  );
+  if (previousEvent && previousEvent.location) {
+    const previousLocation = String(previousEvent.location || "").trim();
+    if (sameLocation_(previousLocation, destination)) {
+      return {
+        skipReason:
+          "previous event is already at destination (" + previousLocation + ")",
+      };
+    }
+    const previousDriveMinutes = getDriveMinutes_(
+      previousLocation,
+      destination,
+      driveDurationCache,
+    );
+    if (previousDriveMinutes !== null) {
+      if (previousDriveMinutes <= driveOpts.minDriveMinutesToCreate) {
+        return {
+          skipReason:
+            "previous event location is within threshold (" +
+            previousDriveMinutes +
+            "m <= " +
+            driveOpts.minDriveMinutesToCreate +
+            "m)",
+        };
+      }
+      return {
+        originAddress: previousLocation,
+        driveMinutes: previousDriveMinutes,
+        previousEventId: previousEvent.id || "",
+      };
+    }
+    console.info(
+      "[INFO] Drive lookup from previous event location failed; falling back to configured origin",
+    );
+  }
+
+  if (!driveOpts.originAddress) {
+    return { skipReason: "no default origin address is configured" };
+  }
+  const driveMinutes = getDriveMinutes_(
+    driveOpts.originAddress,
+    destination,
+    driveDurationCache,
+  );
+  if (driveMinutes === null) {
+    return { skipReason: "route lookup failed" };
+  }
+  if (driveMinutes <= driveOpts.minDriveMinutesToCreate) {
+    return {
+      skipReason:
+        "drive time is within threshold (" +
+        driveMinutes +
+        "m <= " +
+        driveOpts.minDriveMinutesToCreate +
+        "m)",
+    };
+  }
+  return {
+    originAddress: driveOpts.originAddress,
+    driveMinutes: driveMinutes,
+    previousEventId: "",
+  };
+}
+
+/**
+ * Finds the most recent non-placeholder event (with location) ending on/before driveEnd.
+ */
+function findPreviousDriveOriginEvent_(calendarId, driveEnd, excludeEventId) {
+  let pageToken;
+  let best = null;
+  let bestEndMs = -1;
+
+  do {
+    const resp = Calendar.Events.list(calendarId, {
+      showDeleted: false,
+      singleEvents: true,
+      orderBy: "startTime",
+      timeMax: driveEnd.toISOString(),
+      maxResults: 250,
+      pageToken: pageToken,
+    });
+
+    (resp.items || []).forEach(function (ev) {
+      if (excludeEventId && ev.id === excludeEventId) return;
+      if (!ev.location || !String(ev.location).trim()) return;
+      if (isManagedPlaceholderEvent_(ev)) return;
+      if (
+        (ev.start && ev.start.date && !ev.start.dateTime) ||
+        (ev.end && ev.end.date && !ev.end.dateTime)
+      )
+        return;
+
+      const endDate = eventResourceEndDate_(ev);
+      if (!endDate || isNaN(endDate.getTime())) return;
+      if (endDate.getTime() > driveEnd.getTime()) return;
+      if (endDate.getTime() <= bestEndMs) return;
+      best = ev;
+      bestEndMs = endDate.getTime();
+    });
+
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
+
+  return best;
+}
+
+/**
+ * Returns a Date for an event resource end (or start) for ordering comparisons.
+ */
+function eventResourceEndDate_(ev) {
+  const end = ev && (ev.end || ev.start);
+  if (!end) return null;
+  if (end.dateTime) return new Date(end.dateTime);
+  if (end.date) return new Date(end.date + "T00:00:00");
+  return null;
+}
+
+/**
+ * Returns true when two location strings are equivalent after light normalization.
+ */
+function sameLocation_(a, b) {
+  return normalizeLocation_(a) === normalizeLocation_(b);
+}
+
+/**
+ * Normalizes location strings for comparisons.
+ */
+function normalizeLocation_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Returns true when an event is a managed placeholder from this script.
+ */
+function isManagedPlaceholderEvent_(ev) {
+  const kind = (((ev || {}).extendedProperties || {}).private || {})
+    .managedKind;
+  return kind === "drive" || kind === "arrival";
+}
+
+/**
  * Computes drive minutes from origin to destination using Maps and per-run in-memory cache.
  */
 function getDriveMinutes_(originAddress, destinationAddress, cache) {
@@ -1691,6 +1825,8 @@ function buildDrivePlaceholderResource_(
   driveEnd,
   driveHash,
   originAddress,
+  attendees,
+  driveOriginEventId,
 ) {
   const driveDescription =
     "Managed drive-time placeholder.\n" +
@@ -1701,7 +1837,8 @@ function buildDrivePlaceholderResource_(
     (evt.location || "") +
     "\n" +
     "Source event: " +
-    sourceEventId;
+    sourceEventId +
+    (driveOriginEventId ? "\nDrive origin event: " + driveOriginEventId : "");
 
   return {
     summary: driveTitle,
@@ -1713,6 +1850,9 @@ function buildDrivePlaceholderResource_(
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
+    attendees: (attendees || []).map(function (email) {
+      return { email: email };
+    }),
     extendedProperties: {
       private: {
         managedKind: "drive",
@@ -1722,6 +1862,7 @@ function buildDrivePlaceholderResource_(
         syncKey: driveSyncKey,
         sourceSyncKey: sourceSyncKey,
         sourceEventId: sourceEventId,
+        driveOriginEventId: driveOriginEventId || "",
         syncHash: driveHash,
       },
     },
@@ -1743,6 +1884,7 @@ function buildArrivalPlaceholderResource_(
   arrivalEnd,
   arrivalHash,
   arrivalMinutes,
+  attendees,
 ) {
   const arrivalDescription =
     "Managed advanced-arrival placeholder.\n" +
@@ -1762,6 +1904,9 @@ function buildArrivalPlaceholderResource_(
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     guestsCanSeeOtherGuests: true,
+    attendees: (attendees || []).map(function (email) {
+      return { email: email };
+    }),
     extendedProperties: {
       private: {
         managedKind: "arrival",

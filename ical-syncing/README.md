@@ -14,10 +14,12 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 - Forces synced local events to match upstream feed fields on each run (including start/end date and time).
 - Overwrites local edits to synced events on subsequent sync runs.
 - Optionally creates managed drive-time placeholder events from a configured origin address to event location.
+- For drive placeholders, the script first tries to route from the previous non-placeholder event location on the destination calendar; if already there or within threshold, it skips creating drive time.
 - When an event description includes `Arrival: N minutes in advance`, creates a managed advanced-arrival placeholder and anchors drive-time before that arrival block.
 - Deletes local synced events when an upstream event is canceled.
 - Optionally deletes only on/after-today local synced events that are no longer present in the feed (`deleteMissingFromFeed`).
 - Adds configured attendee emails to synced events.
+- Adds configured attendee emails to synced events and managed placeholder events (drive/arrival).
 
 ## script.google.com setup
 
