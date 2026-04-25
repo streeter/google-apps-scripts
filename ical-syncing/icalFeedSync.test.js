@@ -7,6 +7,11 @@ const crypto = require("node:crypto");
 
 function loadIcalSyncContext() {
   const scriptProperties = new Map();
+  const triggerState = {
+    method: null,
+    value: null,
+    created: false,
+  };
   const context = {
     console: {
       log: () => {},
@@ -44,6 +49,12 @@ function loadIcalSyncContext() {
       newTrigger: () => ({
         timeBased: () => ({
           everyMinutes: () => ({
+            create: () => {},
+          }),
+          everyHours: () => ({
+            create: () => {},
+          }),
+          everyDays: () => ({
             create: () => {},
           }),
         }),
@@ -94,7 +105,34 @@ function loadIcalSyncContext() {
         throw new Error("UrlFetchApp.fetch mock not set");
       },
     },
+    __triggerState: triggerState,
   };
+
+  context.ScriptApp.newTrigger = () => ({
+    timeBased: () => ({
+      everyMinutes: (n) => ({
+        create: () => {
+          triggerState.method = "everyMinutes";
+          triggerState.value = n;
+          triggerState.created = true;
+        },
+      }),
+      everyHours: (n) => ({
+        create: () => {
+          triggerState.method = "everyHours";
+          triggerState.value = n;
+          triggerState.created = true;
+        },
+      }),
+      everyDays: (n) => ({
+        create: () => {
+          triggerState.method = "everyDays";
+          triggerState.value = n;
+          triggerState.created = true;
+        },
+      }),
+    }),
+  });
 
   vm.createContext(context);
   const scriptPath = path.resolve(__dirname, "../ical-syncing/icalFeedSync.gs");
@@ -125,6 +163,78 @@ test("getIcalSyncConfig_ defaults minDriveMinutesToCreate to 10", () => {
   assert.equal(cfg.minDriveMinutesToCreate, 10);
 });
 
+test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
+  const ctx = loadIcalSyncContext();
+  const calls = [];
+  const clock = {
+    everyMinutes: (n) => {
+      calls.push(["everyMinutes", n]);
+      return { create: () => {} };
+    },
+    everyHours: (n) => {
+      calls.push(["everyHours", n]);
+      return { create: () => {} };
+    },
+    everyDays: (n) => {
+      calls.push(["everyDays", n]);
+      return { create: () => {} };
+    },
+  };
+
+  ctx.applyTriggerInterval_(clock, 15);
+  ctx.applyTriggerInterval_(clock, 60);
+  ctx.applyTriggerInterval_(clock, 1440);
+
+  assert.deepEqual(calls, [
+    ["everyMinutes", 15],
+    ["everyHours", 1],
+    ["everyDays", 1],
+  ]);
+});
+
+test("setupIcalFeedSyncTrigger uses hourly trigger when triggerEveryMinutes is 60", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    triggerEveryMinutes: 60,
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  ctx.setupIcalFeedSyncTrigger();
+
+  assert.equal(ctx.__triggerState.method, "everyHours");
+  assert.equal(ctx.__triggerState.value, 1);
+  assert.equal(ctx.__triggerState.created, true);
+});
+
+test("applyTriggerInterval_ rejects unsupported minute values", () => {
+  const ctx = loadIcalSyncContext();
+  const clock = {
+    everyMinutes: () => ({ create: () => {} }),
+    everyHours: () => ({ create: () => {} }),
+    everyDays: () => ({ create: () => {} }),
+  };
+
+  assert.throws(
+    () => ctx.applyTriggerInterval_(clock, 45),
+    /Unsupported triggerEveryMinutes value/,
+  );
+});
+
+test("unescapeIcsText_ converts escaped and double-escaped newlines", () => {
+  const ctx = loadIcalSyncContext();
+
+  assert.equal(
+    ctx.unescapeIcsText_("Event Type: Practice\\nHome/Away: Home\\n\\n"),
+    "Event Type: Practice\nHome/Away: Home\n\n",
+  );
+  assert.equal(
+    ctx.unescapeIcsText_("Event Type: Practice\\\\nHome/Away: Home\\\\n\\\\n"),
+    "Event Type: Practice\nHome/Away: Home\n\n",
+  );
+});
+
 test("shouldSyncEvent_ respects cutoff date", () => {
   const ctx = loadIcalSyncContext();
   const cutoff = new Date("2026-04-25T00:00:00Z");
@@ -142,6 +252,38 @@ test("shouldSyncEvent_ respects cutoff date", () => {
 
   assert.equal(ctx.shouldSyncEvent_(past, cutoff), false);
   assert.equal(ctx.shouldSyncEvent_(onCutoff, cutoff), true);
+});
+
+test("extractDriveMinutesFromDirections_ rounds up to nearest 15 minutes", () => {
+  const ctx = loadIcalSyncContext();
+
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 660 } }] }], // 11 minutes
+    }),
+    15,
+  );
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 300 } }] }], // 5 minutes
+    }),
+    15,
+  );
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 301 } }] }], // 6 minutes
+    }),
+    15,
+  );
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 23 * 60 } }] }],
+    }),
+    30,
+  );
+  assert.equal(ctx.roundUpMinutesToNearestFifteen_(1), 15);
+  assert.equal(ctx.roundUpMinutesToNearestFifteen_(15), 15);
+  assert.equal(ctx.roundUpMinutesToNearestFifteen_(23), 30);
 });
 
 test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > threshold", () => {

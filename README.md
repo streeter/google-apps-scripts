@@ -2,6 +2,15 @@
 
 My collection of [Google's App Script](https://script.google.com/) scripts
 
+## 🚀 script.google.com Setup
+
+1. Go to `https://script.google.com/` and create a new project.
+2. Add new script files and paste in the `.gs`/`.js` files you want to run.
+3. If a script has an `.example` config file, create a real config file in Apps Script and fill in your values.
+4. If needed, add Advanced Services in **Services** (for example Calendar API).
+5. Run the main function once manually to authorize permissions.
+6. Add a time-based trigger in **Triggers** for periodic scripts.
+
 ## 💼 Work Scripts
 
 - [`work/README.md`](work/README.md): setup and details for work-calendar scripts.

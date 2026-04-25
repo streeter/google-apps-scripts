@@ -29,10 +29,47 @@ function setupIcalFeedSyncTrigger() {
       ScriptApp.deleteTrigger(t);
     });
 
-  ScriptApp.newTrigger(fn)
-    .timeBased()
-    .everyMinutes(cfg.triggerEveryMinutes)
-    .create();
+  const clockBuilder = ScriptApp.newTrigger(fn).timeBased();
+  const scheduledBuilder = applyTriggerInterval_(
+    clockBuilder,
+    cfg.triggerEveryMinutes,
+  );
+  scheduledBuilder.create();
+}
+
+/**
+ * Applies trigger cadence from minute configuration.
+ * Supports:
+ * - everyMinutes: 1, 5, 10, 15, 30
+ * - everyHours: multiples of 60 (e.g. 60, 120, ..., 1380)
+ * - everyDays: multiples of 1440 (e.g. 1440, 2880, ...)
+ */
+function applyTriggerInterval_(clockBuilder, triggerEveryMinutes) {
+  const minutes = Number(triggerEveryMinutes);
+  if (!isFinite(minutes) || minutes <= 0 || minutes !== Math.floor(minutes)) {
+    throw new Error("triggerEveryMinutes must be a positive integer.");
+  }
+
+  const everyMinuteAllowed = [1, 5, 10, 15, 30];
+  if (everyMinuteAllowed.indexOf(minutes) >= 0) {
+    return clockBuilder.everyMinutes(minutes);
+  }
+
+  if (minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    return clockBuilder.everyDays(days);
+  }
+
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return clockBuilder.everyHours(hours);
+  }
+
+  throw new Error(
+    "Unsupported triggerEveryMinutes value: " +
+      minutes +
+      ". Use 1, 5, 10, 15, 30, or a multiple of 60.",
+  );
 }
 
 /**
@@ -1268,7 +1305,17 @@ function extractDriveMinutesFromDirections_(directions) {
   const leg = routes[0].legs[0];
   const duration = leg && leg.duration ? leg.duration : null;
   if (!duration || typeof duration.value !== "number") return null;
-  return Math.ceil(duration.value / 60);
+  const minutes = Math.ceil(duration.value / 60);
+  return roundUpMinutesToNearestFifteen_(minutes);
+}
+
+/**
+ * Rounds a minute count up to the nearest 15-minute bucket.
+ */
+function roundUpMinutesToNearestFifteen_(minutes) {
+  if (typeof minutes !== "number" || !isFinite(minutes)) return null;
+  if (minutes <= 0) return 0;
+  return Math.ceil(minutes / 15) * 15;
 }
 
 /**
@@ -1408,8 +1455,11 @@ function firstProp_(props, key) {
  */
 function unescapeIcsText_(s) {
   return (s || "")
+    .replace(/\\\\n/gi, "\n")
+    .replace(/\\\\r/gi, "\r")
     .replace(/\\\\/g, "\u0000")
     .replace(/\\n/gi, "\n")
+    .replace(/\\r/gi, "\r")
     .replace(/\\,/g, ",")
     .replace(/\\;/g, ";")
     .replace(/\u0000/g, "\\");

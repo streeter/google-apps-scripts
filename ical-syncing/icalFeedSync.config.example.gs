@@ -6,7 +6,7 @@
 function getIcalSyncConfig() {
   return {
     // Trigger frequency for setupIcalFeedSyncTrigger()
-    // Valid Apps Script values: 1, 5, 10, 15, 30
+    // Supports 1, 5, 10, 15, 30 and multiples of 60 (60=hourly, 1440=daily)
     triggerEveryMinutes: 60,
 
     // If true, remove future local events previously synced from a feed
