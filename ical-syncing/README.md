@@ -18,20 +18,22 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 - Optionally deletes only on/after-today local synced events that are no longer present in the feed (`deleteMissingFromFeed`).
 - Adds configured attendee emails to synced events.
 
-## Setup
+## script.google.com setup
 
-1. In your Apps Script project, add both files from this directory.
-2. Run `listMyCalendarIds()` once (or run `syncIcalFeeds()` once) to print accessible calendar names and IDs in logs.
-3. Copy `icalFeedSync.config.example.gs` to a new file named `icalFeedSync.config.gs`.
-4. Edit `icalFeedSync.config.gs`:
+1. Create a project at `https://script.google.com/`.
+2. Add `icalFeedSync.gs` to the project.
+3. Add a new file `icalFeedSync.config.gs`, using `icalFeedSync.config.example.gs` as the template.
+4. Run `listMyCalendarIds()` once (or run `syncIcalFeeds()` once) to print accessible calendar names and IDs in logs.
+5. Edit `icalFeedSync.config.gs`:
    - Set `calendarId` for each feed mapping.
    - Set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
-5. In Apps Script editor:
+6. In Apps Script editor:
    - Open **Services**.
-   - Add **Calendar API** (Advanced Google Service).
-6. Run `setupIcalFeedSyncTrigger()` once to create the periodic trigger.
-7. Run `syncIcalFeeds()` once manually to validate permissions and behavior.
+   - Add **Google Calendar API** (Advanced Google Service).
+   - If using drive placeholders (`addDriveTimePlaceholders: true`), no extra Advanced Service is needed for Maps. `Maps` is a built-in Apps Script service (it does not appear in the Add a service dialog).
+7. Run `syncIcalFeeds()` once manually to authorize and validate behavior.
+8. Run `setupIcalFeedSyncTrigger()` once to create the periodic trigger.
 
 ## Config shape
 
@@ -60,6 +62,8 @@ function getIcalSyncConfig() {
   };
 }
 ```
+
+`triggerEveryMinutes` supports `1`, `5`, `10`, `15`, `30`, and multiples of `60` (for example `60` hourly, `120` every 2 hours, `1440` daily).
 
 ## Notes
 
