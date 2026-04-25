@@ -133,6 +133,10 @@ function syncOneFeed_(cfg, mapping, today) {
   const icsText = fetchIcs_(mapping.feedUrl);
   const parsed = parseIcs_(icsText);
   const existingByKey = loadExistingEventsByKey_(mapping.calendarId, feedHash);
+  const existingArrivalByKey = loadExistingArrivalEventsByKey_(
+    mapping.calendarId,
+    feedHash,
+  );
   const existingDriveByKey = loadExistingDriveEventsByKey_(
     mapping.calendarId,
     feedHash,
@@ -150,11 +154,19 @@ function syncOneFeed_(cfg, mapping, today) {
     '[INFO] Feed "' +
       feedName +
       '" has ' +
+      Object.keys(existingArrivalByKey).length +
+      " existing managed arrival placeholder(s)",
+  );
+  console.log(
+    '[INFO] Feed "' +
+      feedName +
+      '" has ' +
       Object.keys(existingDriveByKey).length +
       " existing managed drive placeholder(s)",
   );
 
   const seen = {};
+  const seenArrival = {};
   const seenDrive = {};
   const stats = {
     feed: feedName,
@@ -167,11 +179,16 @@ function syncOneFeed_(cfg, mapping, today) {
     driveUpdated: 0,
     driveDeleted: 0,
     driveSkipped: 0,
+    arrivalCreated: 0,
+    arrivalUpdated: 0,
+    arrivalDeleted: 0,
+    arrivalSkipped: 0,
   };
 
   parsed.events.forEach(function (evt) {
     const effectiveEvt = applyEventTitlePrefix_(evt, mapping.titlePrefix);
     const syncKey = buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey);
+    const arrivalSyncKey = buildArrivalSyncKey_(syncKey);
     const driveSyncKey = buildDriveSyncKey_(syncKey);
     seen[syncKey] = true;
     const existing = existingByKey[syncKey];
@@ -203,6 +220,15 @@ function syncOneFeed_(cfg, mapping, today) {
       } else {
         stats.skipped++;
       }
+      maybeDeleteArrivalPlaceholder_(
+        mapping,
+        feedHash,
+        arrivalSyncKey,
+        existingArrivalByKey,
+        today,
+        stats,
+        "source event canceled",
+      );
       maybeDeleteDrivePlaceholder_(
         mapping,
         feedHash,
@@ -245,6 +271,18 @@ function syncOneFeed_(cfg, mapping, today) {
       );
       stats.created++;
       console.log('[CREATE] "' + (effectiveEvt.summary || "(No title)") + '"');
+      const arrivalAnchorStart = reconcileArrivalPlaceholder_(
+        effectiveEvt,
+        inserted,
+        mapping,
+        feedHash,
+        syncKey,
+        arrivalSyncKey,
+        existingArrivalByKey,
+        seenArrival,
+        today,
+        stats,
+      );
       reconcileDrivePlaceholder_(
         effectiveEvt,
         inserted,
@@ -258,6 +296,7 @@ function syncOneFeed_(cfg, mapping, today) {
         today,
         stats,
         driveDurationCache,
+        arrivalAnchorStart,
       );
       return;
     }
@@ -272,6 +311,10 @@ function syncOneFeed_(cfg, mapping, today) {
       stats.driveSkipped++;
       console.info(
         "[SKIP] Drive placeholder skipped because source event is unmanaged",
+      );
+      stats.arrivalSkipped++;
+      console.info(
+        "[SKIP] Arrival placeholder skipped because source event is unmanaged",
       );
       return;
     }
@@ -300,6 +343,18 @@ function syncOneFeed_(cfg, mapping, today) {
     } else {
       console.log("[UPDATE] Event " + existing.id + " (forced resync)");
     }
+    const arrivalAnchorStart = reconcileArrivalPlaceholder_(
+      effectiveEvt,
+      patched,
+      mapping,
+      feedHash,
+      syncKey,
+      arrivalSyncKey,
+      existingArrivalByKey,
+      seenArrival,
+      today,
+      stats,
+    );
     reconcileDrivePlaceholder_(
       effectiveEvt,
       patched,
@@ -313,6 +368,7 @@ function syncOneFeed_(cfg, mapping, today) {
       today,
       stats,
       driveDurationCache,
+      arrivalAnchorStart,
     );
   });
 
@@ -353,6 +409,29 @@ function syncOneFeed_(cfg, mapping, today) {
         );
       }
     });
+
+    Object.keys(existingArrivalByKey).forEach(function (arrivalSyncKey) {
+      if (seenArrival[arrivalSyncKey]) return;
+      const arrivalEv = existingArrivalByKey[arrivalSyncKey];
+      if (
+        !isManagedArrivalEventForFeed_(arrivalEv, mapping.feedUrl, feedHash)
+      ) {
+        console.info(
+          "[SKIP] Not deleting non-managed arrival placeholder " + arrivalEv.id,
+        );
+        return;
+      }
+      if (isFutureEventResource_(arrivalEv, today)) {
+        Calendar.Events.remove(mapping.calendarId, arrivalEv.id);
+        stats.arrivalDeleted++;
+        console.log(
+          "[DELETE] Deleted feed-missing arrival placeholder " +
+            arrivalEv.id +
+            " from " +
+            feedName,
+        );
+      }
+    });
   }
 
   console.log(
@@ -376,7 +455,15 @@ function syncOneFeed_(cfg, mapping, today) {
       ", driveDeleted=" +
       stats.driveDeleted +
       ", driveSkipped=" +
-      stats.driveSkipped,
+      stats.driveSkipped +
+      ", arrivalCreated=" +
+      stats.arrivalCreated +
+      ", arrivalUpdated=" +
+      stats.arrivalUpdated +
+      ", arrivalDeleted=" +
+      stats.arrivalDeleted +
+      ", arrivalSkipped=" +
+      stats.arrivalSkipped,
   );
   return stats;
 }
@@ -879,6 +966,13 @@ function buildSyncKey_(feedHash, uid, recurrenceIdKey) {
 }
 
 /**
+ * Builds the advanced-arrival-placeholder sync key for a given source-event sync key.
+ */
+function buildArrivalSyncKey_(sourceSyncKey) {
+  return "arrival:" + sourceSyncKey;
+}
+
+/**
  * Builds the drive-placeholder sync key for a given source-event sync key.
  */
 function buildDriveSyncKey_(sourceSyncKey) {
@@ -919,13 +1013,179 @@ function loadExistingEventsByKey_(calendarId, feedHash) {
 
     (resp.items || []).forEach(function (ev) {
       const key = ((ev.extendedProperties || {}).private || {}).syncKey || "";
-      if (key && !isDriveSyncKey_(key)) out[key] = ev;
+      if (key && !isDriveSyncKey_(key) && !isArrivalSyncKey_(key))
+        out[key] = ev;
     });
 
     pageToken = resp.nextPageToken;
   } while (pageToken);
 
   return out;
+}
+
+/**
+ * Loads existing advanced-arrival-placeholder events managed by this feed, keyed by arrival sync key.
+ */
+function loadExistingArrivalEventsByKey_(calendarId, feedHash) {
+  const out = {};
+  let pageToken;
+
+  do {
+    const resp = Calendar.Events.list(calendarId, {
+      privateExtendedProperty: ["sourceFeed=" + feedHash],
+      showDeleted: false,
+      singleEvents: false,
+      maxResults: 2500,
+      pageToken: pageToken,
+    });
+
+    (resp.items || []).forEach(function (ev) {
+      const key = ((ev.extendedProperties || {}).private || {}).syncKey || "";
+      if (key && isArrivalSyncKey_(key)) out[key] = ev;
+    });
+
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
+
+  return out;
+}
+
+/**
+ * Creates/updates/deletes advanced-arrival placeholders for one synced source event.
+ * Returns the arrival start Date when an arrival placeholder should anchor drive-time, else null.
+ */
+function reconcileArrivalPlaceholder_(
+  evt,
+  syncedEvent,
+  mapping,
+  feedHash,
+  sourceSyncKey,
+  arrivalSyncKey,
+  existingArrivalByKey,
+  seenArrival,
+  today,
+  stats,
+) {
+  const existingArrival = existingArrivalByKey[arrivalSyncKey] || null;
+
+  if (!isEventStartOnOrAfterCutoff_(evt, today)) {
+    stats.arrivalSkipped++;
+    console.info(
+      "[SKIP] Arrival placeholder ignored for pre-today source event",
+    );
+    return null;
+  }
+
+  if (isAllDayEvent_(evt)) {
+    stats.arrivalSkipped++;
+    console.info("[SKIP] Arrival placeholder ignored for all-day source event");
+    maybeDeleteArrivalPlaceholder_(
+      mapping,
+      feedHash,
+      arrivalSyncKey,
+      existingArrivalByKey,
+      today,
+      stats,
+      "source event is all-day",
+    );
+    return null;
+  }
+
+  const arrivalMinutes = extractArrivalLeadMinutes_(evt.description);
+  if (!arrivalMinutes || arrivalMinutes <= 0) {
+    stats.arrivalSkipped++;
+    maybeDeleteArrivalPlaceholder_(
+      mapping,
+      feedHash,
+      arrivalSyncKey,
+      existingArrivalByKey,
+      today,
+      stats,
+      "source event has no arrival lead-time instruction",
+    );
+    return null;
+  }
+
+  const sourceStart = getSourceEventStartDate_(syncedEvent);
+  if (!sourceStart) {
+    stats.arrivalSkipped++;
+    console.info(
+      "[SKIP] Arrival placeholder ignored because source start time is unavailable",
+    );
+    maybeDeleteArrivalPlaceholder_(
+      mapping,
+      feedHash,
+      arrivalSyncKey,
+      existingArrivalByKey,
+      today,
+      stats,
+      "source start time unavailable",
+    );
+    return null;
+  }
+
+  const arrivalEnd = sourceStart;
+  const arrivalStart = new Date(
+    arrivalEnd.getTime() - arrivalMinutes * 60 * 1000,
+  );
+  const arrivalTitle = "Advanced arrival for " + (evt.summary || "(No title)");
+  const arrivalHash = computeArrivalPlaceholderHash_(
+    sourceSyncKey,
+    syncedEvent.id,
+    arrivalStart,
+    arrivalEnd,
+    arrivalTitle,
+    arrivalMinutes,
+  );
+  const arrivalResource = buildArrivalPlaceholderResource_(
+    mapping,
+    feedHash,
+    evt,
+    sourceSyncKey,
+    arrivalSyncKey,
+    syncedEvent.id,
+    arrivalTitle,
+    arrivalStart,
+    arrivalEnd,
+    arrivalHash,
+    arrivalMinutes,
+  );
+  seenArrival[arrivalSyncKey] = true;
+
+  if (!existingArrival) {
+    Calendar.Events.insert(arrivalResource, mapping.calendarId, {
+      sendUpdates: "none",
+    });
+    stats.arrivalCreated++;
+    console.log(
+      "[CREATE] Arrival placeholder for source event " + syncedEvent.id,
+    );
+    return arrivalStart;
+  }
+
+  if (
+    !isManagedArrivalEventForFeed_(existingArrival, mapping.feedUrl, feedHash)
+  ) {
+    stats.arrivalSkipped++;
+    console.info(
+      "[SKIP] Not updating unmanaged arrival placeholder " + existingArrival.id,
+    );
+    return null;
+  }
+
+  Calendar.Events.patch(
+    arrivalResource,
+    mapping.calendarId,
+    existingArrival.id,
+    {
+      sendUpdates: "none",
+    },
+  );
+  stats.arrivalUpdated++;
+  console.log(
+    "[UPDATE] Arrival placeholder " + existingArrival.id + " (forced resync)",
+  );
+  return arrivalStart;
 }
 
 /**
@@ -971,6 +1231,7 @@ function reconcileDrivePlaceholder_(
   today,
   stats,
   driveDurationCache,
+  arrivalAnchorStart,
 ) {
   const destination = (evt.location || "").trim();
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
@@ -1105,7 +1366,12 @@ function reconcileDrivePlaceholder_(
     return;
   }
 
-  const driveEnd = sourceStart;
+  const driveEnd =
+    arrivalAnchorStart instanceof Date &&
+    !isNaN(arrivalAnchorStart.getTime()) &&
+    arrivalAnchorStart.getTime() < sourceStart.getTime()
+      ? arrivalAnchorStart
+      : sourceStart;
   const driveStart = new Date(driveEnd.getTime() - driveMinutes * 60 * 1000);
   const driveTitle = renderDriveEventTitle_(
     driveOpts.titleTemplate,
@@ -1191,6 +1457,34 @@ function maybeDeleteDrivePlaceholder_(
 }
 
 /**
+ * Deletes an arrival placeholder when it exists, is managed by this feed, and is on/after cutoff.
+ */
+function maybeDeleteArrivalPlaceholder_(
+  mapping,
+  feedHash,
+  arrivalSyncKey,
+  existingArrivalByKey,
+  today,
+  stats,
+  reason,
+) {
+  const existingArrival = existingArrivalByKey[arrivalSyncKey];
+  if (!existingArrival) return;
+  if (
+    !isManagedArrivalEventForFeed_(existingArrival, mapping.feedUrl, feedHash)
+  )
+    return;
+  if (!isFutureEventResource_(existingArrival, today)) return;
+
+  Calendar.Events.remove(mapping.calendarId, existingArrival.id);
+  delete existingArrivalByKey[arrivalSyncKey];
+  stats.arrivalDeleted++;
+  console.log(
+    "[DELETE] Arrival placeholder " + existingArrival.id + " (" + reason + ")",
+  );
+}
+
+/**
  * Verifies an event is owned by this script for this specific feed mapping.
  */
 function isManagedEventForFeed_(ev, feedUrl, feedHash) {
@@ -1201,6 +1495,21 @@ function isManagedEventForFeed_(ev, feedUrl, feedHash) {
   if (p.sourceFeed !== feedHash) return false;
   if (p.sourceUrl !== feedUrl) return false;
   if (!p.sourceUid) return false;
+  return true;
+}
+
+/**
+ * Verifies an arrival placeholder is managed by this script for this feed.
+ */
+function isManagedArrivalEventForFeed_(ev, feedUrl, feedHash) {
+  const p = (ev.extendedProperties || {}).private || {};
+  if (!p.syncKey || typeof p.syncKey !== "string") return false;
+  if (!isArrivalSyncKey_(p.syncKey)) return false;
+  if (p.managedKind && p.managedKind !== "arrival") return false;
+  if (p.sourceFeed !== feedHash) return false;
+  if (p.sourceUrl !== feedUrl) return false;
+  if (!p.sourceUid) return false;
+  if (!p.sourceSyncKey) return false;
   return true;
 }
 
@@ -1217,6 +1526,13 @@ function isManagedDriveEventForFeed_(ev, feedUrl, feedHash) {
   if (!p.sourceUid) return false;
   if (!p.sourceSyncKey) return false;
   return true;
+}
+
+/**
+ * Returns true when a sync key corresponds to an arrival placeholder.
+ */
+function isArrivalSyncKey_(syncKey) {
+  return typeof syncKey === "string" && syncKey.indexOf("arrival:") === 0;
 }
 
 /**
@@ -1336,6 +1652,21 @@ function roundUpMinutesToNearestFifteen_(minutes) {
 }
 
 /**
+ * Extracts lead-time minutes from event descriptions like:
+ * "Arrival: 30 minutes in advance"
+ */
+function extractArrivalLeadMinutes_(description) {
+  const text = String(description || "");
+  const m = text.match(
+    /(?:^|\n)\s*Arrival:\s*(\d+)\s*minutes?\s*in\s*advance\b/i,
+  );
+  if (!m) return null;
+  const minutes = Number(m[1]);
+  if (!isFinite(minutes) || minutes <= 0) return null;
+  return Math.floor(minutes);
+}
+
+/**
  * Renders drive placeholder title from a template and source event details.
  */
 function renderDriveEventTitle_(template, evt, driveMinutes) {
@@ -1398,6 +1729,56 @@ function buildDrivePlaceholderResource_(
 }
 
 /**
+ * Builds the Calendar API resource for a managed advanced-arrival placeholder event.
+ */
+function buildArrivalPlaceholderResource_(
+  mapping,
+  feedHash,
+  evt,
+  sourceSyncKey,
+  arrivalSyncKey,
+  sourceEventId,
+  arrivalTitle,
+  arrivalStart,
+  arrivalEnd,
+  arrivalHash,
+  arrivalMinutes,
+) {
+  const arrivalDescription =
+    "Managed advanced-arrival placeholder.\n" +
+    "Lead time: " +
+    arrivalMinutes +
+    " minutes\n" +
+    "Source event: " +
+    sourceEventId;
+
+  return {
+    summary: arrivalTitle,
+    description: addGeneratedByDescription_(arrivalDescription),
+    location: evt.location || "",
+    start: { dateTime: arrivalStart.toISOString() },
+    end: { dateTime: arrivalEnd.toISOString() },
+    visibility: "default",
+    guestsCanModify: false,
+    guestsCanInviteOthers: false,
+    guestsCanSeeOtherGuests: true,
+    extendedProperties: {
+      private: {
+        managedKind: "arrival",
+        sourceFeed: feedHash,
+        sourceUrl: mapping.feedUrl,
+        sourceUid: evt.uid,
+        syncKey: arrivalSyncKey,
+        sourceSyncKey: sourceSyncKey,
+        sourceEventId: sourceEventId,
+        arrivalMinutes: String(arrivalMinutes),
+        syncHash: arrivalHash,
+      },
+    },
+  };
+}
+
+/**
  * Computes a stable hash for drive placeholder fields so source linkage is explicit.
  */
 function computeDrivePlaceholderHash_(
@@ -1418,6 +1799,29 @@ function computeDrivePlaceholderHash_(
       driveStart: driveStart.toISOString(),
       driveEnd: driveEnd.toISOString(),
       driveTitle: driveTitle,
+    }),
+  );
+}
+
+/**
+ * Computes a stable hash for arrival placeholder fields so source linkage is explicit.
+ */
+function computeArrivalPlaceholderHash_(
+  sourceSyncKey,
+  sourceEventId,
+  arrivalStart,
+  arrivalEnd,
+  arrivalTitle,
+  arrivalMinutes,
+) {
+  return sha256Hex_(
+    JSON.stringify({
+      sourceSyncKey: sourceSyncKey,
+      sourceEventId: sourceEventId,
+      arrivalStart: arrivalStart.toISOString(),
+      arrivalEnd: arrivalEnd.toISOString(),
+      arrivalTitle: arrivalTitle,
+      arrivalMinutes: arrivalMinutes,
     }),
   );
 }

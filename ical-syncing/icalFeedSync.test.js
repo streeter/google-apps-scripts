@@ -147,6 +147,10 @@ function baseStats() {
     driveUpdated: 0,
     driveDeleted: 0,
     driveSkipped: 0,
+    arrivalCreated: 0,
+    arrivalUpdated: 0,
+    arrivalDeleted: 0,
+    arrivalSkipped: 0,
   };
 }
 
@@ -316,6 +320,21 @@ test("extractDriveMinutesFromDirections_ rounds up to nearest 15 minutes", () =>
   assert.equal(ctx.roundUpMinutesToNearestFifteen_(23), 30);
 });
 
+test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () => {
+  const ctx = loadIcalSyncContext();
+  assert.equal(
+    ctx.extractArrivalLeadMinutes_(
+      "Event Type: Practice\nArrival: 30 minutes in advance\nHome/Away: Home",
+    ),
+    30,
+  );
+  assert.equal(
+    ctx.extractArrivalLeadMinutes_("Arrival: 1 minute in advance"),
+    1,
+  );
+  assert.equal(ctx.extractArrivalLeadMinutes_("No arrival guidance"), null);
+});
+
 test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > threshold", () => {
   const ctx = loadIcalSyncContext();
   const inserted = [];
@@ -427,6 +446,32 @@ test("drive placeholder resource carries source linkage metadata", () => {
   assert.equal(p.syncKey, "drive:feedhash123:source-sync");
 });
 
+test("arrival placeholder resource carries source linkage metadata", () => {
+  const ctx = loadIcalSyncContext();
+  const arrivalStart = new Date("2099-05-01T15:00:00Z");
+  const arrivalEnd = new Date("2099-05-01T15:30:00Z");
+  const resource = ctx.buildArrivalPlaceholderResource_(
+    { feedUrl: "https://example.com/feed.ics" },
+    "feedhash123",
+    { uid: "uid-1", location: "Destination" },
+    "feedhash123:source-sync",
+    "arrival:feedhash123:source-sync",
+    "source-event-123",
+    "Advanced arrival for Practice",
+    arrivalStart,
+    arrivalEnd,
+    "arrivalhash123",
+    30,
+  );
+
+  const p = resource.extendedProperties.private;
+  assert.equal(p.managedKind, "arrival");
+  assert.equal(p.sourceSyncKey, "feedhash123:source-sync");
+  assert.equal(p.sourceEventId, "source-event-123");
+  assert.equal(p.arrivalMinutes, "30");
+  assert.equal(p.syncKey, "arrival:feedhash123:source-sync");
+});
+
 test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   const ctx = loadIcalSyncContext();
   const inserts = [];
@@ -444,6 +489,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
       "END:VCALENDAR",
     ].join("\n");
   ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
   ctx.loadExistingDriveEventsByKey_ = () => ({});
   ctx.getDriveMinutes_ = () => 25;
 
@@ -519,4 +565,114 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
     drive.extendedProperties.private.syncKey,
     ctx.buildDriveSyncKey_(drive.extendedProperties.private.sourceSyncKey),
   );
+});
+
+test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", () => {
+  const ctx = loadIcalSyncContext();
+  const inserts = [];
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:uid-1",
+      "DTSTART:20990501T153000Z",
+      "DTEND:20990501T163000Z",
+      "SUMMARY:Soccer Game",
+      "DESCRIPTION:Event Type: Practice\\nArrival: 30 minutes in advance",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.getDriveMinutes_ = () => 25;
+
+  ctx.Calendar.Events.insert = (resource, calendarId) => {
+    assert.equal(calendarId, "calendar-1");
+    inserts.push(resource);
+    const kind = resource.extendedProperties.private.managedKind;
+    if (kind === "source") {
+      return {
+        id: "source-created-1",
+        start: resource.start,
+        end: resource.end,
+        extendedProperties: resource.extendedProperties,
+      };
+    }
+    if (kind === "arrival") {
+      return {
+        id: "arrival-created-1",
+        start: resource.start,
+        end: resource.end,
+        extendedProperties: resource.extendedProperties,
+      };
+    }
+    return {
+      id: "drive-created-1",
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const cfg = {
+    deleteMissingFromFeed: false,
+    defaultAttendeeEmails: [],
+    addDriveTimePlaceholders: false,
+    defaultOriginAddress: "New York, NY",
+    minDriveMinutesToCreate: 10,
+    driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
+  };
+  const mapping = {
+    name: "Sports Feed",
+    feedUrl: "https://example.com/sports.ics",
+    calendarId: "calendar-1",
+    attendeeEmails: [],
+    titlePrefix: "[Sports]",
+    addDriveTimePlaceholders: true,
+    originAddress: "",
+  };
+
+  const stats = ctx.syncOneFeed_(
+    cfg,
+    mapping,
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 1);
+  assert.equal(stats.arrivalCreated, 1);
+  assert.equal(stats.driveCreated, 1);
+  assert.equal(inserts.length, 3);
+  assert.deepEqual(
+    inserts.map((r) => r.extendedProperties.private.managedKind),
+    ["source", "arrival", "drive"],
+  );
+
+  const source = inserts.find(
+    (r) => r.extendedProperties.private.managedKind === "source",
+  );
+  const arrival = inserts.find(
+    (r) => r.extendedProperties.private.managedKind === "arrival",
+  );
+  const drive = inserts.find(
+    (r) => r.extendedProperties.private.managedKind === "drive",
+  );
+
+  assert.ok(source);
+  assert.ok(arrival);
+  assert.ok(drive);
+  assert.equal(source.summary, "[Sports] Soccer Game");
+  assert.equal(arrival.summary, "Advanced arrival for [Sports] Soccer Game");
+  assert.equal(arrival.start.dateTime, "2099-05-01T15:00:00.000Z");
+  assert.equal(arrival.end.dateTime, "2099-05-01T15:30:00.000Z");
+  assert.equal(drive.end.dateTime, "2099-05-01T15:00:00.000Z");
+  assert.equal(drive.start.dateTime, "2099-05-01T14:35:00.000Z");
 });
