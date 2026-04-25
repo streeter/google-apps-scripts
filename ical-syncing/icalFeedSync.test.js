@@ -620,6 +620,38 @@ test("resolveDrivePlan_ applies place-name mappings before route lookup", () => 
   assert.deepEqual(captured, [["North Lot", "1000 Park Ave, City, ST"]]);
 });
 
+test("findPreviousDriveOriginEvent_ ignores events older than one hour", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.Calendar.Events.list = () => ({
+    items: [
+      {
+        id: "old-1",
+        summary: "Old Practice",
+        location: "Old Gym",
+        start: { dateTime: "2099-05-01T12:00:00Z" },
+        end: { dateTime: "2099-05-01T13:00:00Z" },
+      },
+      {
+        id: "recent-1",
+        summary: "Recent Practice",
+        location: "Recent Gym",
+        start: { dateTime: "2099-05-01T14:15:00Z" },
+        end: { dateTime: "2099-05-01T14:45:00Z" },
+      },
+    ],
+  });
+
+  const found = ctx.findPreviousDriveOriginEvent_(
+    "calendar-1",
+    new Date("2099-05-01T15:00:00Z"),
+    "source-1",
+    60,
+  );
+
+  assert.ok(found);
+  assert.equal(found.id, "recent-1");
+});
+
 test("reconcileDrivePlaceholder_ resolves summary-only venue names through place mappings", () => {
   const ctx = loadIcalSyncContext();
   const inserted = [];

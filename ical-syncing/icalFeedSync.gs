@@ -14,6 +14,7 @@
 
 const GENERATED_BY_DESCRIPTION =
   "Generated with github.com/streeter/google-apps-scripts";
+const DRIVE_LOOKBACK_MINUTES = 60;
 
 /**
  * Creates (or recreates) the periodic time-based trigger for the main sync function.
@@ -1774,6 +1775,7 @@ function resolveDrivePlan_(
     calendarId,
     driveEnd,
     sourceEventId,
+    DRIVE_LOOKBACK_MINUTES,
   );
   if (previousEvent && previousEvent.location) {
     const previousLocationResolution = resolvePlaceNameAddress_(
@@ -1909,18 +1911,27 @@ function resolvePlaceNameAddress_(text, rules) {
 }
 
 /**
- * Finds the most recent non-placeholder event (with location) ending on/before driveEnd.
+ * Finds the most recent non-placeholder event (with location) ending within the lookback window.
  */
-function findPreviousDriveOriginEvent_(calendarId, driveEnd, excludeEventId) {
+function findPreviousDriveOriginEvent_(
+  calendarId,
+  driveEnd,
+  excludeEventId,
+  lookbackMinutes,
+) {
   let pageToken;
   let best = null;
   let bestEndMs = -1;
+  const windowStartMs =
+    driveEnd.getTime() -
+    (Number(lookbackMinutes) || DRIVE_LOOKBACK_MINUTES) * 60 * 1000;
 
   do {
     const resp = Calendar.Events.list(calendarId, {
       showDeleted: false,
       singleEvents: true,
       orderBy: "startTime",
+      timeMin: new Date(windowStartMs).toISOString(),
       timeMax: driveEnd.toISOString(),
       maxResults: 250,
       pageToken: pageToken,
@@ -1938,6 +1949,7 @@ function findPreviousDriveOriginEvent_(calendarId, driveEnd, excludeEventId) {
 
       const endDate = eventResourceEndDate_(ev);
       if (!endDate || isNaN(endDate.getTime())) return;
+      if (endDate.getTime() < windowStartMs) return;
       if (endDate.getTime() > driveEnd.getTime()) return;
       if (endDate.getTime() <= bestEndMs) return;
       best = ev;
