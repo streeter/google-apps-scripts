@@ -12,6 +12,9 @@
  * 3) Run setupIcalFeedSyncTrigger() once
  */
 
+/**
+ * Creates (or recreates) the periodic time-based trigger for the main sync function.
+ */
 function setupIcalFeedSyncTrigger() {
   const cfg = getIcalSyncConfig_();
   const fn = "syncIcalFeeds";
@@ -29,7 +32,11 @@ function setupIcalFeedSyncTrigger() {
     .create();
 }
 
+/**
+ * Main entry point: logs setup info, loads config, and syncs each feed mapping.
+ */
 function syncIcalFeeds() {
+  logCalendarIdsOnFirstRun_();
   const cfg = getIcalSyncConfig_();
   const today = startOfToday_();
   const results = [];
@@ -52,6 +59,16 @@ function syncIcalFeeds() {
   Logger.log(JSON.stringify(results, null, 2));
 }
 
+/**
+ * Utility entry point for setup-time logging of all accessible calendar IDs.
+ */
+function listMyCalendarIds() {
+  logAllCalendarIds_();
+}
+
+/**
+ * Syncs one ICS feed into one target calendar for events on/after the cutoff date.
+ */
 function syncOneFeed_(cfg, mapping, today) {
   const feedHash = sha256Hex_(mapping.feedUrl).slice(0, 16);
   const feedName = mapping.name || mapping.feedUrl;
@@ -189,6 +206,9 @@ function syncOneFeed_(cfg, mapping, today) {
   return stats;
 }
 
+/**
+ * Reads and validates user config from getIcalSyncConfig(), filling safe defaults.
+ */
 function getIcalSyncConfig_() {
   if (typeof getIcalSyncConfig !== "function") {
     throw new Error(
@@ -216,6 +236,9 @@ function getIcalSyncConfig_() {
   return cfg;
 }
 
+/**
+ * Fetches raw ICS text from a remote URL and throws on non-200 responses.
+ */
 function fetchIcs_(url) {
   const resp = UrlFetchApp.fetch(url, {
     method: "get",
@@ -230,6 +253,9 @@ function fetchIcs_(url) {
   return resp.getContentText();
 }
 
+/**
+ * Parses an ICS document into normalized event objects plus calendar-level timezone.
+ */
 function parseIcs_(text) {
   const lines = unfoldIcsLines_(text);
   const events = [];
@@ -264,6 +290,9 @@ function parseIcs_(text) {
   return { events: events, calendarTimezone: calendarTimezone };
 }
 
+/**
+ * Parses one VEVENT block into the normalized internal event model.
+ */
 function parseVEvent_(lines, fallbackTz) {
   const props = {};
   const recurrence = [];
@@ -314,6 +343,9 @@ function parseVEvent_(lines, fallbackTz) {
   };
 }
 
+/**
+ * Parses a single ICS content line into name/params/value components.
+ */
 function parseIcsLine_(line) {
   const idx = line.indexOf(":");
   if (idx < 0) return null;
@@ -339,6 +371,9 @@ function parseIcsLine_(line) {
   return { name: name, params: params, value: value };
 }
 
+/**
+ * Unfolds folded ICS lines (continuation lines starting with space/tab).
+ */
 function unfoldIcsLines_(text) {
   const raw = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   const out = [];
@@ -354,6 +389,9 @@ function unfoldIcsLines_(text) {
   return out;
 }
 
+/**
+ * Converts ICS date/date-time property values into the internal parsed date shape.
+ */
 function parseIcsDate_(prop, fallbackTz) {
   const value = (prop.value || "").trim();
   const valueType = (prop.params.VALUE || "").toUpperCase();
@@ -380,6 +418,9 @@ function parseIcsDate_(prop, fallbackTz) {
   };
 }
 
+/**
+ * Produces a fallback end value when DTSTART exists but DTEND is missing.
+ */
 function defaultEndFromStart_(start) {
   if (start.type === "date") {
     const d = new Date(start.date + "T00:00:00");
@@ -413,6 +454,9 @@ function defaultEndFromStart_(start) {
   };
 }
 
+/**
+ * Returns whether an event should be synced given the on/after-cutoff policy.
+ */
 function shouldSyncEvent_(evt, cutoffDate) {
   if (evt.cancelled) return true;
   if (!evt.start || !evt.end) return false;
@@ -426,6 +470,9 @@ function shouldSyncEvent_(evt, cutoffDate) {
   return end.getTime() >= cutoffDate.getTime();
 }
 
+/**
+ * Returns true when a recurrence rule has fully ended before the cutoff date.
+ */
 function recurrenceEnded_(recurrenceLines, cutoffDate) {
   for (let i = 0; i < recurrenceLines.length; i++) {
     const line = recurrenceLines[i];
@@ -443,6 +490,9 @@ function recurrenceEnded_(recurrenceLines, cutoffDate) {
   return false;
 }
 
+/**
+ * Parses RRULE UNTIL values into JavaScript Date values.
+ */
 function parseUntilDate_(untilRaw) {
   if (/^\d{8}$/.test(untilRaw)) {
     return new Date(untilRaw.replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3T23:59:59"));
@@ -454,6 +504,9 @@ function parseUntilDate_(untilRaw) {
   return new Date(iso);
 }
 
+/**
+ * Builds the Calendar API event resource used for initial event creation.
+ */
 function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbackTz) {
   const resource = {
     summary: evt.summary || "(No title)",
@@ -485,6 +538,9 @@ function buildEventResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbac
   return resource;
 }
 
+/**
+ * Builds the Calendar API patch resource used to force existing events back to feed state.
+ */
 function buildEventPatchResource_(evt, feedUrl, feedHash, syncKey, attendees, fallbackTz) {
   const resource = {
     summary: evt.summary || "(No title)",
@@ -515,6 +571,9 @@ function buildEventPatchResource_(evt, feedUrl, feedHash, syncKey, attendees, fa
   return resource;
 }
 
+/**
+ * Converts internal parsed date data into Google Calendar API start/end shape.
+ */
 function toGoogleDate_(parsed, fallbackTz) {
   if (parsed.type === "date") return { date: parsed.date };
 
@@ -525,6 +584,9 @@ function toGoogleDate_(parsed, fallbackTz) {
   return out;
 }
 
+/**
+ * Computes a stable hash of feed-driven event fields to track upstream state.
+ */
 function computeEventHash_(evt, attendees) {
   const normalized = {
     uid: evt.uid,
@@ -541,11 +603,17 @@ function computeEventHash_(evt, attendees) {
   return sha256Hex_(JSON.stringify(normalized));
 }
 
+/**
+ * Builds a deterministic per-feed sync key using UID + recurrence identity.
+ */
 function buildSyncKey_(feedHash, uid, recurrenceIdKey) {
   const raw = uid + "||" + (recurrenceIdKey || "");
   return feedHash + ":" + sha256Hex_(raw).slice(0, 40);
 }
 
+/**
+ * Loads existing calendar events previously managed by this feed, keyed by syncKey.
+ */
 function loadExistingEventsByKey_(calendarId, feedHash) {
   const out = {};
   let pageToken;
@@ -570,6 +638,9 @@ function loadExistingEventsByKey_(calendarId, feedHash) {
   return out;
 }
 
+/**
+ * Verifies an event is owned by this script for this specific feed mapping.
+ */
 function isManagedEventForFeed_(ev, feedUrl, feedHash) {
   const p = ((ev.extendedProperties || {}).private) || {};
   if (!p.syncKey || typeof p.syncKey !== "string") return false;
@@ -580,6 +651,9 @@ function isManagedEventForFeed_(ev, feedUrl, feedHash) {
   return true;
 }
 
+/**
+ * Returns whether an existing Calendar API event is on/after the cutoff date.
+ */
 function isFutureEventResource_(ev, cutoffDate) {
   if (ev.recurrence && ev.recurrence.length) {
     return !recurrenceEnded_(ev.recurrence, cutoffDate);
@@ -596,6 +670,9 @@ function isFutureEventResource_(ev, cutoffDate) {
   return when.getTime() >= cutoffDate.getTime();
 }
 
+/**
+ * Returns whether a parsed feed event is on/after the cutoff date.
+ */
 function isEventOnOrAfterCutoff_(evt, cutoffDate) {
   if (!evt || (!evt.start && !evt.end)) return false;
   const anchor = parsedDateToDate_(evt.end || evt.start);
@@ -603,12 +680,18 @@ function isEventOnOrAfterCutoff_(evt, cutoffDate) {
   return anchor.getTime() >= cutoffDate.getTime();
 }
 
+/**
+ * Converts the internal parsed date shape into a JavaScript Date for comparisons.
+ */
 function parsedDateToDate_(parsed) {
   if (!parsed) return null;
   if (parsed.type === "date") return new Date(parsed.date + "T00:00:00");
   return new Date(parsed.dateTime);
 }
 
+/**
+ * Normalizes/deduplicates attendee emails and returns a unique lowercase list.
+ */
 function uniqueEmails_(emails) {
   const s = {};
   emails
@@ -618,11 +701,17 @@ function uniqueEmails_(emails) {
   return Object.keys(s);
 }
 
+/**
+ * Returns the first property entry for an ICS property name, or null.
+ */
 function firstProp_(props, key) {
   const arr = props[key];
   return arr && arr.length ? arr[0] : null;
 }
 
+/**
+ * Unescapes ICS text escape sequences (\\n, \\, \\;, etc.).
+ */
 function unescapeIcsText_(s) {
   return (s || "")
     .replace(/\\\\/g, "\u0000")
@@ -632,6 +721,9 @@ function unescapeIcsText_(s) {
     .replace(/\u0000/g, "\\");
 }
 
+/**
+ * Returns a hex SHA-256 digest for the provided input string.
+ */
 function sha256Hex_(input) {
   const bytes = Utilities.computeDigest(
     Utilities.DigestAlgorithm.SHA_256,
@@ -646,11 +738,17 @@ function sha256Hex_(input) {
     .join("");
 }
 
+/**
+ * Formats a Date into YYYY-MM-DD (local clock).
+ */
 function formatYmd_(d) {
   const p = function(n) { return n < 10 ? "0" + n : "" + n; };
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
 }
 
+/**
+ * Formats a Date into YYYY-MM-DDTHH:mm:ss (local clock, no timezone suffix).
+ */
 function formatLocalDateTime_(d) {
   const p = function(n) { return n < 10 ? "0" + n : "" + n; };
   return (
@@ -663,8 +761,33 @@ function formatLocalDateTime_(d) {
   );
 }
 
+/**
+ * Returns local midnight for "today" to use as sync cutoff.
+ */
 function startOfToday_() {
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   return now;
+}
+
+/**
+ * One-time setup helper: logs all accessible calendars on first sync run.
+ */
+function logCalendarIdsOnFirstRun_() {
+  const key = "icalSync.calendarIdsLoggedOnce";
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty(key) === "1") return;
+  logAllCalendarIds_();
+  props.setProperty(key, "1");
+}
+
+/**
+ * Logs all accessible calendars as "name => id" for configuration lookup.
+ */
+function logAllCalendarIds_() {
+  const calendars = CalendarApp.getAllCalendars();
+  console.log("[SETUP] Accessible calendars: " + calendars.length);
+  calendars.forEach(function(cal) {
+    console.log("[SETUP] " + cal.getName() + " => " + cal.getId());
+  });
 }

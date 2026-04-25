@@ -20,15 +20,16 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 ## Setup
 
 1. In your Apps Script project, add both files from this directory.
-2. Copy `icalFeedSync.config.example.gs` to a new file named `icalFeedSync.config.gs`.
-3. Edit `icalFeedSync.config.gs`:
+2. Run `listMyCalendarIds()` once (or run `syncIcalFeeds()` once) to print accessible calendar names and IDs in logs.
+3. Copy `icalFeedSync.config.example.gs` to a new file named `icalFeedSync.config.gs`.
+4. Edit `icalFeedSync.config.gs`:
    - Set `calendarId` for each feed mapping.
    - Set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`.
-4. In Apps Script editor:
+5. In Apps Script editor:
    - Open **Services**.
    - Add **Calendar API** (Advanced Google Service).
-5. Run `setupIcalFeedSyncTrigger()` once to create the periodic trigger.
-6. Run `syncIcalFeeds()` once manually to validate permissions and behavior.
+6. Run `setupIcalFeedSyncTrigger()` once to create the periodic trigger.
+7. Run `syncIcalFeeds()` once manually to validate permissions and behavior.
 
 ## Config shape
 
@@ -58,3 +59,4 @@ function getIcalSyncConfig() {
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when non-empty.
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
 - Delete operations are guarded to only remove events that are verifiably managed by this script/feed.
+- On first `syncIcalFeeds()` run, the script logs all accessible calendar names/IDs once, to help with initial config.
