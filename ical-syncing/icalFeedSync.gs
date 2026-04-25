@@ -12,6 +12,9 @@
  * 3) Run setupIcalFeedSyncTrigger() once
  */
 
+const GENERATED_BY_DESCRIPTION =
+  "Generated with github.com/streeter/google-apps-scripts";
+
 /**
  * Creates (or recreates) the periodic time-based trigger for the main sync function.
  */
@@ -710,7 +713,7 @@ function buildEventResource_(
 ) {
   const resource = {
     summary: evt.summary || "(No title)",
-    description: evt.description || "",
+    description: addGeneratedByDescription_(evt.description || ""),
     location: evt.location || "",
     start: toGoogleDate_(evt.start, fallbackTz),
     end: toGoogleDate_(evt.end, fallbackTz),
@@ -752,7 +755,7 @@ function buildEventPatchResource_(
 ) {
   const resource = {
     summary: evt.summary || "(No title)",
-    description: evt.description || "",
+    description: addGeneratedByDescription_(evt.description || ""),
     location: evt.location || "",
     start: toGoogleDate_(evt.start, fallbackTz),
     end: toGoogleDate_(evt.end, fallbackTz),
@@ -1294,18 +1297,20 @@ function buildDrivePlaceholderResource_(
   driveHash,
   originAddress,
 ) {
+  const driveDescription =
+    "Managed drive-time placeholder.\n" +
+    "From: " +
+    originAddress +
+    "\n" +
+    "To: " +
+    (evt.location || "") +
+    "\n" +
+    "Source event: " +
+    sourceEventId;
+
   return {
     summary: driveTitle,
-    description:
-      "Managed drive-time placeholder.\n" +
-      "From: " +
-      originAddress +
-      "\n" +
-      "To: " +
-      (evt.location || "") +
-      "\n" +
-      "Source event: " +
-      sourceEventId,
+    description: addGeneratedByDescription_(driveDescription),
     location: evt.location || "",
     start: { dateTime: driveStart.toISOString() },
     end: { dateTime: driveEnd.toISOString() },
@@ -1351,6 +1356,16 @@ function computeDrivePlaceholderHash_(
       driveTitle: driveTitle,
     }),
   );
+}
+
+/**
+ * Appends the generated-by attribution line to an event description if missing.
+ */
+function addGeneratedByDescription_(description) {
+  const text = String(description || "");
+  if (text.indexOf(GENERATED_BY_DESCRIPTION) >= 0) return text;
+  if (!text.trim()) return GENERATED_BY_DESCRIPTION;
+  return text + "\n\n" + GENERATED_BY_DESCRIPTION;
 }
 
 /**

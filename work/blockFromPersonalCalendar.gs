@@ -23,6 +23,9 @@ const CONFIG = {
   color: CalendarApp.EventColor.YELLOW, // set the color of any newly created events (see https://developers.google.com/apps-script/reference/calendar/event-color)
 };
 
+const GENERATED_BY_DESCRIPTION =
+  "Generated with github.com/streeter/google-apps-scripts";
+
 const blockFromPersonalCalendars = () => {
   /**
    * Wrapper for the filtering functions that logs why something was skipped
@@ -268,8 +271,7 @@ const blockFromPersonalCalendars = () => {
         event.getStartTime(),
         event.getEndTime(),
         {
-          description:
-            "Generated with https://github.com/streeter/google-apps-scripts",
+          description: GENERATED_BY_DESCRIPTION,
         },
       );
 

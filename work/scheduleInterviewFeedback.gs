@@ -135,7 +135,7 @@ function scheduleInterviewFeedback() {
           {
             location: location,
             description:
-              "Generated with https://github.com/streeter/google-apps-scripts",
+              "Generated with github.com/streeter/google-apps-scripts",
           },
         );
         createdEvent
