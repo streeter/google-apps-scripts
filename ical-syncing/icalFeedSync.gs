@@ -196,7 +196,7 @@ function syncOneFeed_(cfg, mapping, today) {
     if (evt.cancelled) {
       if (!isEventOnOrAfterCutoff_(evt, today)) {
         stats.skipped++;
-        console.info("[SKIP] Not processing cancel for pre-today event");
+        console.info("[SKIP] Not processing cancel for event in the past");
         return;
       }
       if (existing) {
@@ -244,7 +244,7 @@ function syncOneFeed_(cfg, mapping, today) {
     if (!shouldSyncEvent_(effectiveEvt, today)) {
       stats.skipped++;
       console.info(
-        '[SKIP] Pre-today event "' +
+        '[SKIP] Event in the past "' +
           (effectiveEvt.summary || "(No title)") +
           '"',
       );
@@ -1088,7 +1088,7 @@ function reconcileArrivalPlaceholder_(
   if (!isEventStartOnOrAfterCutoff_(evt, today)) {
     stats.arrivalSkipped++;
     console.info(
-      "[SKIP] Arrival placeholder ignored for pre-today source event",
+      "[SKIP] Arrival placeholder ignored for source event in the past",
     );
     return null;
   }
@@ -1281,7 +1281,7 @@ function reconcileDrivePlaceholder_(
   if (!isEventStartOnOrAfterCutoff_(evt, today)) {
     stats.driveSkipped++;
     console.info(
-      '[SKIP] Drive placeholder ignored for pre-today event "' +
+      '[SKIP] Drive placeholder ignored for event in the past "' +
         sourceTitle +
         '"',
     );
