@@ -2049,7 +2049,7 @@ function extractDriveMinutesFromDirections_(directions) {
   const duration = leg && leg.duration ? leg.duration : null;
   if (!duration || typeof duration.value !== "number") return null;
   const minutes = Math.ceil(duration.value / 60);
-  return roundUpMinutesToNearestFifteen_(minutes);
+  return roundDriveMinutesForPlaceholder_(minutes);
 }
 
 /**
@@ -2141,12 +2141,19 @@ function logDirectionsDiagnostics_(
 }
 
 /**
- * Rounds a minute count up to the nearest 15-minute bucket.
+ * Rounds a minute count for drive placeholders:
+ * - < 10 minutes: 0, so the placeholder is skipped by threshold logic
+ * - 10-15 minutes: 15
+ * - 16-20 minutes: 20
+ * - > 20 minutes: next 10-minute bucket
  */
-function roundUpMinutesToNearestFifteen_(minutes) {
+function roundDriveMinutesForPlaceholder_(minutes) {
   if (typeof minutes !== "number" || !isFinite(minutes)) return null;
   if (minutes <= 0) return 0;
-  return Math.ceil(minutes / 15) * 15;
+  if (minutes < 10) return 0;
+  if (minutes <= 15) return 15;
+  if (minutes <= 20) return 20;
+  return Math.ceil(minutes / 10) * 10;
 }
 
 /**

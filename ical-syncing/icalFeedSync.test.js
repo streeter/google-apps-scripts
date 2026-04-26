@@ -291,36 +291,64 @@ test("shouldSyncEvent_ respects cutoff date", () => {
   assert.equal(ctx.shouldSyncEvent_(onCutoff, cutoff), true);
 });
 
-test("extractDriveMinutesFromDirections_ rounds up to nearest 15 minutes", () => {
+test("extractDriveMinutesFromDirections_ applies drive placeholder rounding rules", () => {
   const ctx = loadIcalSyncContext();
 
   assert.equal(
     ctx.extractDriveMinutesFromDirections_({
-      routes: [{ legs: [{ duration: { value: 660 } }] }], // 11 minutes
+      routes: [{ legs: [{ duration: { value: 9 * 60 } }] }],
+    }),
+    0,
+  );
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 10 * 60 } }] }],
     }),
     15,
   );
   assert.equal(
     ctx.extractDriveMinutesFromDirections_({
-      routes: [{ legs: [{ duration: { value: 300 } }] }], // 5 minutes
+      routes: [{ legs: [{ duration: { value: 15 * 60 } }] }],
     }),
     15,
   );
   assert.equal(
     ctx.extractDriveMinutesFromDirections_({
-      routes: [{ legs: [{ duration: { value: 301 } }] }], // 6 minutes
+      routes: [{ legs: [{ duration: { value: 16 * 60 } }] }],
     }),
-    15,
+    20,
   );
   assert.equal(
     ctx.extractDriveMinutesFromDirections_({
-      routes: [{ legs: [{ duration: { value: 23 * 60 } }] }],
+      routes: [{ legs: [{ duration: { value: 20 * 60 } }] }],
+    }),
+    20,
+  );
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 21 * 60 } }] }],
     }),
     30,
   );
-  assert.equal(ctx.roundUpMinutesToNearestFifteen_(1), 15);
-  assert.equal(ctx.roundUpMinutesToNearestFifteen_(15), 15);
-  assert.equal(ctx.roundUpMinutesToNearestFifteen_(23), 30);
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 29 * 60 } }] }],
+    }),
+    30,
+  );
+  assert.equal(
+    ctx.extractDriveMinutesFromDirections_({
+      routes: [{ legs: [{ duration: { value: 31 * 60 } }] }],
+    }),
+    40,
+  );
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(1), 0);
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(10), 15);
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(15), 15);
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(16), 20);
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(20), 20);
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(23), 30);
+  assert.equal(ctx.roundDriveMinutesForPlaceholder_(31), 40);
 });
 
 test("getDriveMinutes_ logs route diagnostics when directions are incomplete", () => {
