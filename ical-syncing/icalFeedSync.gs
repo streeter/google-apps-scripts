@@ -1,5 +1,5 @@
 /**
- * iCal -> Google Calendar sync (future events), with update + attendee injection.
+ * iCal -> Google Calendar sync (future events), with update + target calendar attendee injection.
  *
  * This script expects a separate config file that defines:
  *   function getIcalSyncConfig() { return { ... }; }
@@ -323,9 +323,12 @@ function syncOneFeed_(cfg, mapping, today) {
       return;
     }
 
-    const existingDeclined = isCurrentUserDeclinedEvent_(existing);
+    const existingDeclined = isTargetCalendarDeclinedEvent_(
+      existing,
+      mapping.calendarId,
+    );
     const patchAttendees = existingDeclined
-      ? buildDeclinedAttendees_(existing)
+      ? buildDeclinedAttendees_(existing, mapping.calendarId)
       : sourceAttendees;
     const oldHash =
       ((existing.extendedProperties || {}).private || {}).syncHash || "";
@@ -1087,15 +1090,10 @@ function buildPlaceNameAddressRules_(cfg, mapping) {
 }
 
 /**
- * Returns source-event attendees with the current user and any extra emails added.
+ * Returns configured source-event attendees plus the target calendar.
  */
-function buildSourceAttendees_(attendees, extraEmails) {
-  const emails = uniqueEmails_(
-    (attendees || [])
-      .concat([getCurrentUserEmail_()])
-      .concat(extraEmails || []),
-  );
-  return emails;
+function buildSourceAttendees_(attendees, calendarId) {
+  return uniqueEmails_((attendees || []).concat([calendarId]));
 }
 
 /**
@@ -1356,7 +1354,7 @@ function reconcileDrivePlaceholder_(
     console.info(
       '[SKIP] Drive placeholder ignored because "' +
         sourceTitle +
-        '" has no usable location or place-name mapping',
+        '" has no location',
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -1369,19 +1367,11 @@ function reconcileDrivePlaceholder_(
     );
     return;
   }
-  if (destinationCandidate.source === "summary") {
-    console.info(
-      '[INFO] Using event summary as drive destination candidate for "' +
-        sourceTitle +
-        '"',
-    );
-  } else {
-    console.info(
-      '[INFO] Using event location as drive destination candidate for "' +
-        sourceTitle +
-        '"',
-    );
-  }
+  console.info(
+    '[INFO] Using event location as drive destination candidate for "' +
+      sourceTitle +
+      '"',
+  );
   const destination = destinationCandidate.text;
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
 
@@ -1523,6 +1513,7 @@ function reconcileDrivePlaceholder_(
     driveEnd,
     driveHash,
     driveOrigin,
+    destination,
     attendees,
     drivePlan.previousEventId || "",
   );
@@ -1881,13 +1872,11 @@ function resolveDrivePlan_(
 }
 
 /**
- * Picks the best raw destination text for a drive lookup, favoring location then summary.
+ * Picks the raw location text for a drive lookup.
  */
 function resolveDriveDestinationCandidate_(evt) {
   const location = String((evt && evt.location) || "").trim();
   if (location) return { text: location, source: "location" };
-  const summary = String((evt && evt.summary) || "").trim();
-  if (summary) return { text: summary, source: "summary" };
   return { text: "", source: "" };
 }
 
@@ -2201,16 +2190,24 @@ function buildDrivePlaceholderResource_(
   driveEnd,
   driveHash,
   originAddress,
+  destinationAddress,
   attendees,
   driveOriginEventId,
 ) {
+  const directionsUrl = buildGoogleMapsDirectionsUrl_(
+    originAddress,
+    destinationAddress,
+  );
   const driveDescription =
     "Managed drive-time placeholder.\n" +
     "From: " +
     originAddress +
     "\n" +
     "To: " +
-    (evt.location || "") +
+    destinationAddress +
+    "\n" +
+    "Directions: " +
+    directionsUrl +
     "\n" +
     "Source event: " +
     (sourceEventTitle || sourceEventId) +
@@ -2243,6 +2240,18 @@ function buildDrivePlaceholderResource_(
       },
     },
   };
+}
+
+/**
+ * Builds a Google Maps driving-directions URL from origin and destination.
+ */
+function buildGoogleMapsDirectionsUrl_(originAddress, destinationAddress) {
+  return (
+    "https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=" +
+    encodeURIComponent(String(originAddress || "")) +
+    "&destination=" +
+    encodeURIComponent(String(destinationAddress || ""))
+  );
 }
 
 /**
@@ -2406,48 +2415,28 @@ function toCalendarAttendeeResource_(attendee) {
 }
 
 /**
- * Returns the current user's email if Apps Script exposes it.
+ * Returns true when the target calendar's attendee entry is marked declined.
  */
-function getCurrentUserEmail_() {
-  const candidates = [];
-  try {
-    candidates.push(Session.getEffectiveUser().getEmail());
-  } catch (e) {}
-  try {
-    candidates.push(Session.getActiveUser().getEmail());
-  } catch (e) {}
-  for (let i = 0; i < candidates.length; i++) {
-    const email = String(candidates[i] || "")
-      .trim()
-      .toLowerCase();
-    if (email) return email;
-  }
-  return "";
+function isTargetCalendarDeclinedEvent_(ev, calendarId) {
+  return !!getTargetCalendarAttendee_(ev, calendarId, "declined");
 }
 
 /**
- * Returns true when the current user's attendee entry is marked declined.
+ * Returns the target calendar's attendee entry when it matches the requested status.
  */
-function isCurrentUserDeclinedEvent_(ev) {
-  return !!getCurrentUserAttendee_(ev, "declined");
-}
-
-/**
- * Returns the current user's attendee entry when it matches the requested status.
- */
-function getCurrentUserAttendee_(ev, responseStatus) {
+function getTargetCalendarAttendee_(ev, calendarId, responseStatus) {
   const attendees = (ev && ev.attendees) || [];
-  const currentUser = getCurrentUserEmail_();
-  const targetEmail = currentUser ? currentUser.toLowerCase() : "";
+  const targetEmail = String(calendarId || "")
+    .trim()
+    .toLowerCase();
+  if (!targetEmail) return null;
   for (let i = 0; i < attendees.length; i++) {
     const attendee = attendees[i];
     if (!attendee) continue;
     const email = String(attendee.email || "")
       .trim()
       .toLowerCase();
-    const matchesSelf =
-      !!attendee.self || (targetEmail && email === targetEmail);
-    if (!matchesSelf) continue;
+    if (email !== targetEmail) continue;
     if (
       responseStatus &&
       String(attendee.responseStatus || "").toLowerCase() !== responseStatus
@@ -2460,20 +2449,22 @@ function getCurrentUserAttendee_(ev, responseStatus) {
 }
 
 /**
- * Keeps only the current user's attendee entry and marks it declined.
+ * Keeps only the target calendar's attendee entry and marks it declined.
  */
-function buildDeclinedAttendees_(ev) {
-  const selfAttendee = getCurrentUserAttendee_(ev, null);
+function buildDeclinedAttendees_(ev, calendarId) {
+  const targetAttendee = getTargetCalendarAttendee_(ev, calendarId, null);
   const email =
-    selfAttendee && selfAttendee.email
-      ? String(selfAttendee.email).trim().toLowerCase()
-      : getCurrentUserEmail_();
+    targetAttendee && targetAttendee.email
+      ? String(targetAttendee.email).trim().toLowerCase()
+      : String(calendarId || "")
+          .trim()
+          .toLowerCase();
   if (!email) return [];
   const declined = {
     email: email,
     responseStatus: "declined",
   };
-  if (selfAttendee && selfAttendee.self) declined.self = true;
+  if (targetAttendee && targetAttendee.self) declined.self = true;
   return [declined];
 }
 

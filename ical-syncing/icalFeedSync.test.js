@@ -652,14 +652,14 @@ test("findPreviousDriveOriginEvent_ ignores events older than one hour", () => {
   assert.equal(found.id, "recent-1");
 });
 
-test("reconcileDrivePlaceholder_ resolves summary-only venue names through place mappings", () => {
+test("reconcileDrivePlaceholder_ skips events without a location", () => {
   const ctx = loadIcalSyncContext();
   const inserted = [];
-  const captured = [];
-  ctx.findPreviousDriveOriginEvent_ = () => null;
-  ctx.getDriveMinutes_ = (origin, destination) => {
-    captured.push([origin, destination]);
-    return 25;
+  ctx.findPreviousDriveOriginEvent_ = () => {
+    throw new Error("unexpected previous event lookup");
+  };
+  ctx.getDriveMinutes_ = () => {
+    throw new Error("unexpected drive lookup");
   };
   ctx.Calendar.Events.insert = (resource, calendarId) => {
     assert.equal(calendarId, "b@example.com");
@@ -710,6 +710,7 @@ test("reconcileDrivePlaceholder_ resolves summary-only venue names through place
   const existingDriveByKey = {};
   const seenDrive = {};
   const today = new Date("2026-01-01T00:00:00Z");
+  const stats = baseStats();
 
   ctx.reconcileDrivePlaceholder_(
     evt,
@@ -722,16 +723,15 @@ test("reconcileDrivePlaceholder_ resolves summary-only venue names through place
     existingDriveByKey,
     seenDrive,
     today,
-    baseStats(),
+    stats,
     {},
     null,
     [],
   );
 
-  assert.equal(inserted.length, 1);
-  assert.deepEqual(captured, [["Brooklyn, NY", "1000 Park Ave, City, ST"]]);
-  assert.equal(inserted[0].location, "");
-  assert.equal(inserted[0].summary, "Drive to McMoran Park Field 1 (60)");
+  assert.equal(stats.driveCreated, 0);
+  assert.equal(stats.driveSkipped, 1);
+  assert.equal(inserted.length, 0);
 });
 
 test("reconcileDrivePlaceholder_ creates placeholder only when drive time is > threshold", () => {
@@ -841,6 +841,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
     driveEnd,
     "drivehash123",
     "Origin Address",
+    "Destination Address",
     ["a@example.com", "b@example.com"],
   );
 
@@ -850,6 +851,12 @@ test("drive placeholder resource carries source linkage metadata", () => {
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.syncKey, "drive:feedhash123:source-sync");
   assert.match(resource.description, /Source event: Practice/);
+  assert.match(resource.description, /From: Origin Address/);
+  assert.match(resource.description, /To: Destination Address/);
+  assert.match(
+    resource.description,
+    /Directions: https:\/\/www\.google\.com\/maps\/dir\/\?api=1&travelmode=driving&origin=Origin%20Address&destination=Destination%20Address/,
+  );
   assert.equal(
     JSON.stringify(resource.attendees),
     JSON.stringify([{ email: "a@example.com" }, { email: "b@example.com" }]),
@@ -886,6 +893,27 @@ test("arrival placeholder resource carries source linkage metadata", () => {
   assert.equal(
     JSON.stringify(resource.attendees),
     JSON.stringify([{ email: "a@example.com" }, { email: "b@example.com" }]),
+  );
+});
+
+test("attendee selection uses configured attendees and ignores current user", () => {
+  const ctx = loadIcalSyncContext();
+  const existing = {
+    attendees: [
+      { email: "owner@example.com", self: true, responseStatus: "declined" },
+      { email: "calendar-1", responseStatus: "accepted" },
+    ],
+  };
+
+  assert.equal(
+    JSON.stringify(
+      ctx.buildSourceAttendees_(["coach@example.com"], "calendar-1"),
+    ),
+    JSON.stringify(["coach@example.com", "calendar-1"]),
+  );
+  assert.equal(
+    ctx.isTargetCalendarDeclinedEvent_(existing, "calendar-1"),
+    false,
   );
 });
 
@@ -978,7 +1006,6 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
     JSON.stringify([
       { email: "coach@example.com" },
       { email: "parent@example.com" },
-      { email: "owner@example.com" },
       { email: "b@example.com" },
     ]),
   );
@@ -1101,7 +1128,6 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
     JSON.stringify([
       { email: "coach@example.com" },
       { email: "parent@example.com" },
-      { email: "owner@example.com" },
       { email: "b@example.com" },
     ]),
   );
@@ -1115,7 +1141,6 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
     JSON.stringify([
       { email: "coach@example.com" },
       { email: "parent@example.com" },
-      { email: "owner@example.com" },
       { email: "b@example.com" },
     ]),
   );
@@ -1124,13 +1149,12 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
     JSON.stringify([
       { email: "coach@example.com" },
       { email: "parent@example.com" },
-      { email: "owner@example.com" },
       { email: "b@example.com" },
     ]),
   );
 });
 
-test("syncOneFeed_ preserves a local decline and removes placeholders", () => {
+test("syncOneFeed_ preserves a target calendar decline and removes placeholders", () => {
   const ctx = loadIcalSyncContext();
   const removed = [];
   let patched = null;
@@ -1159,7 +1183,7 @@ test("syncOneFeed_ preserves a local decline and removes placeholders", () => {
       end: { dateTime: "2099-05-01T16:30:00Z" },
       attendees: [
         {
-          email: "owner@example.com",
+          email: "calendar-1",
           self: true,
           responseStatus: "declined",
         },
@@ -1269,7 +1293,7 @@ test("syncOneFeed_ preserves a local decline and removes placeholders", () => {
   assert.equal(
     JSON.stringify(patched.attendees[0]),
     JSON.stringify({
-      email: "owner@example.com",
+      email: "calendar-1",
       responseStatus: "declined",
       self: true,
     }),

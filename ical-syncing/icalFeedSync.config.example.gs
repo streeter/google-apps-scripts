@@ -1,6 +1,6 @@
 /**
  * Copy this file to: icalFeedSync.config.gs
- * Then fill in real calendar IDs and attendee emails.
+ * Then fill in real calendar IDs and optional attendee emails.
  */
 
 function getIcalSyncConfig() {
@@ -25,11 +25,9 @@ function getIcalSyncConfig() {
     minDriveMinutesToCreate: 10,
     driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
 
-    // Added as attendees on all synced events, unless overridden per feed.
-    defaultAttendeeEmails: [
-      "example1@yourcompany.com",
-      "example2@yourcompany.com",
-    ],
+    // Optional extra attendees added to all synced events, unless overridden per feed.
+    // Leave empty to add only the target calendarId.
+    defaultAttendeeEmails: [],
 
     // One mapping per ICS feed -> target Google Calendar
     feedMappings: [
@@ -43,7 +41,7 @@ function getIcalSyncConfig() {
         // Example: "[Cole]" -> "[Cole] Practice"
         titlePrefix: "",
 
-        // Optional per-feed attendee override.
+        // Optional per-feed extra attendee override.
         // If empty, defaultAttendeeEmails is used.
         attendeeEmails: [],
 
