@@ -878,12 +878,18 @@ test("drive placeholder resource carries source linkage metadata", () => {
   assert.equal(p.sourceSyncKey, "feedhash123:source-sync");
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.syncKey, "drive:feedhash123:source-sync");
-  assert.match(resource.description, /Source event: Practice/);
-  assert.match(resource.description, /From: Origin Address/);
-  assert.match(resource.description, /To: Destination Address/);
   assert.match(
     resource.description,
-    /Directions: https:\/\/www\.google\.com\/maps\/dir\/\?api=1&travelmode=driving&origin=Origin%20Address&destination=Destination%20Address/,
+    /<strong>Source event:<\/strong> Practice/,
+  );
+  assert.match(resource.description, /<strong>From:<\/strong> Origin Address/);
+  assert.match(
+    resource.description,
+    /<strong>To:<\/strong> Destination Address/,
+  );
+  assert.match(
+    resource.description,
+    /<a href="https:\/\/www\.google\.com\/maps\/dir\/\?api=1&amp;travelmode=driving&amp;origin=Origin%20Address&amp;destination=Destination%20Address">Open driving directions in Google Maps<\/a>/,
   );
   assert.equal(
     JSON.stringify(resource.attendees),

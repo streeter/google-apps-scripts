@@ -2206,19 +2206,22 @@ function buildDrivePlaceholderResource_(
     destinationAddress,
   );
   const driveDescription =
-    "Managed drive-time placeholder.\n" +
-    "From: " +
-    originAddress +
-    "\n" +
-    "To: " +
-    destinationAddress +
-    "\n" +
-    "Directions: " +
-    directionsUrl +
-    "\n" +
-    "Source event: " +
-    (sourceEventTitle || sourceEventId) +
-    (driveOriginEventId ? "\nDrive origin event: " + driveOriginEventId : "");
+    "<p><strong>Managed drive-time placeholder</strong></p>" +
+    "<p><strong>From:</strong> " +
+    escapeHtml_(originAddress) +
+    "<br><strong>To:</strong> " +
+    escapeHtml_(destinationAddress) +
+    "</p>" +
+    '<p><a href="' +
+    escapeHtml_(directionsUrl) +
+    '">Open driving directions in Google Maps</a></p>' +
+    "<p><strong>Source event:</strong> " +
+    escapeHtml_(sourceEventTitle || sourceEventId) +
+    (driveOriginEventId
+      ? "<br><strong>Drive origin event:</strong> " +
+        escapeHtml_(driveOriginEventId)
+      : "") +
+    "</p>";
 
   return {
     summary: driveTitle,
@@ -2259,6 +2262,18 @@ function buildGoogleMapsDirectionsUrl_(originAddress, destinationAddress) {
     "&destination=" +
     encodeURIComponent(String(destinationAddress || ""))
   );
+}
+
+/**
+ * Escapes text for safe use in Calendar event HTML descriptions.
+ */
+function escapeHtml_(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 /**
