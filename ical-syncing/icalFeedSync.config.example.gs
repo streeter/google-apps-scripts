@@ -42,7 +42,8 @@ function getIcalSyncConfig() {
         titlePrefix: "",
 
         // Optional per-feed extra attendee override.
-        // If empty, defaultAttendeeEmails is used.
+        // If omitted, defaultAttendeeEmails is used.
+        // If provided as [], no extra attendees are added.
         attendeeEmails: [],
 
         // Optional per-feed drive placeholder settings.

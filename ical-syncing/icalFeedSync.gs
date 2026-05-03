@@ -122,8 +122,12 @@ function listMyCalendarIds() {
 function syncOneFeed_(cfg, mapping, today) {
   const feedHash = sha256Hex_(mapping.feedUrl).slice(0, 16);
   const feedName = mapping.name || mapping.feedUrl;
+  const hasMappingAttendeeEmails = Object.prototype.hasOwnProperty.call(
+    mapping,
+    "attendeeEmails",
+  );
   const attendees = uniqueEmails_(
-    (mapping.attendeeEmails && mapping.attendeeEmails.length
+    (hasMappingAttendeeEmails
       ? mapping.attendeeEmails
       : cfg.defaultAttendeeEmails) || [],
   );
@@ -570,7 +574,12 @@ function getIcalSyncConfig_() {
     if (!m.feedUrl) throw new Error("feedMappings[" + i + "] missing feedUrl.");
     if (!m.calendarId)
       throw new Error("feedMappings[" + i + "] missing calendarId.");
-    if (!Array.isArray(m.attendeeEmails)) m.attendeeEmails = [];
+    if (
+      Object.prototype.hasOwnProperty.call(m, "attendeeEmails") &&
+      !Array.isArray(m.attendeeEmails)
+    ) {
+      m.attendeeEmails = [];
+    }
     if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;

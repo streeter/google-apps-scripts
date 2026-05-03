@@ -951,6 +951,66 @@ test("attendee selection uses configured attendees and ignores current user", ()
   );
 });
 
+test("syncOneFeed_ uses defaults only when attendeeEmails is omitted", () => {
+  const ctx = loadIcalSyncContext();
+  const inserts = [];
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:uid-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = (resource) => {
+    inserts.push(resource);
+    return {
+      id: "source-created-1",
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const cfg = {
+    deleteMissingFromFeed: false,
+    defaultAttendeeEmails: ["coach@example.com"],
+    addDriveTimePlaceholders: false,
+  };
+
+  ctx.syncOneFeed_(
+    cfg,
+    {
+      name: "Omitted Attendees",
+      feedUrl: "https://example.com/feed.ics",
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(
+    JSON.stringify(inserts[0].attendees),
+    JSON.stringify([{ email: "coach@example.com" }, { email: "calendar-1" }]),
+  );
+});
+
 test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   const ctx = loadIcalSyncContext();
   const inserts = [];
@@ -1037,11 +1097,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   assert.equal(source.summary, "[Sports] Client Meeting");
   assert.equal(
     JSON.stringify(source.attendees),
-    JSON.stringify([
-      { email: "coach@example.com" },
-      { email: "parent@example.com" },
-      { email: "b@example.com" },
-    ]),
+    JSON.stringify([{ email: "b@example.com" }]),
   );
   assert.equal(drive.summary, "Drive (25m) to [Sports] Client Meeting");
   assert.equal(
@@ -1159,11 +1215,7 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   assert.equal(source.summary, "[Sports] Soccer Game");
   assert.equal(
     JSON.stringify(source.attendees),
-    JSON.stringify([
-      { email: "coach@example.com" },
-      { email: "parent@example.com" },
-      { email: "b@example.com" },
-    ]),
+    JSON.stringify([{ email: "b@example.com" }]),
   );
   assert.equal(arrival.summary, "Advanced arrival for [Sports] Soccer Game");
   assert.equal(arrival.start.dateTime, "2099-05-01T15:00:00.000Z");
@@ -1172,19 +1224,11 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   assert.equal(drive.start.dateTime, "2099-05-01T14:35:00.000Z");
   assert.equal(
     JSON.stringify(arrival.attendees),
-    JSON.stringify([
-      { email: "coach@example.com" },
-      { email: "parent@example.com" },
-      { email: "b@example.com" },
-    ]),
+    JSON.stringify([{ email: "b@example.com" }]),
   );
   assert.equal(
     JSON.stringify(drive.attendees),
-    JSON.stringify([
-      { email: "coach@example.com" },
-      { email: "parent@example.com" },
-      { email: "b@example.com" },
-    ]),
+    JSON.stringify([{ email: "b@example.com" }]),
   );
 });
 
