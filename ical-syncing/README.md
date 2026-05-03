@@ -5,6 +5,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 ## Files
 
 - `icalFeedSync.gs`: main sync script.
+- `appsscript.json`: Apps Script manifest used by `clasp push`; includes the Calendar advanced service and required OAuth scopes.
 - `icalFeedSync.config.example.gs`: example config file. Copy this to `icalFeedSync.config.gs` and fill in your values.
 
 ## What the script does
@@ -39,6 +40,35 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
    - If using drive placeholders (`addDriveTimePlaceholders: true`), no extra Advanced Service is needed for Maps. `Maps` is a built-in Apps Script service (it does not appear in the Add a service dialog).
 7. Run `syncIcalFeeds()` once manually to authorize and validate behavior.
 8. Run `setupIcalFeedSyncTrigger()` once to create the periodic trigger.
+
+## Deploy with clasp
+
+This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev dependency and a placeholder `.clasp.json` for this script directory.
+
+1. Enable the Apps Script API at `https://script.google.com/home/usersettings`.
+2. Authenticate once:
+
+   ```bash
+   npm run clasp:login
+   ```
+
+3. Edit `ical-syncing/.clasp.json` and replace `REPLACE_WITH_APPS_SCRIPT_PROJECT_SCRIPT_ID` with the Apps Script project script ID.
+   - In the Apps Script editor, find it under **Project Settings** → **Script ID**.
+   - Keep `rootDir` set to `"."`.
+4. Ensure `ical-syncing/icalFeedSync.config.gs` exists locally with your real feed/calendar settings.
+5. Push the iCal sync files:
+
+   ```bash
+   npm run clasp:push:ical
+   ```
+
+6. Open the Apps Script project when needed:
+
+   ```bash
+   npm run clasp:open:ical
+   ```
+
+`ical-syncing/.claspignore` excludes local docs, tests, the placeholder `.clasp.json`, and the example config from uploads. `appsscript.json` must be uploaded because Apps Script requires a manifest. The real `icalFeedSync.config.gs` remains gitignored, but it will be uploaded by `clasp push` when present locally.
 
 ## Config shape
 

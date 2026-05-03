@@ -3,11 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "clasp:login": "clasp login",
+    "clasp:open:ical": "cd ical-syncing && clasp open",
+    "clasp:push:ical": "cd ical-syncing && clasp push",
     "lint": "prettier --check \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
     "format": "prettier --write \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
     "test": "node --test"
   },
   "devDependencies": {
+    "@google/clasp": "^3.3.0",
     "prettier": "^3.6.2"
   }
 }

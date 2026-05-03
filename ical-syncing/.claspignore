@@ -1,0 +1,6 @@
+# Keep local docs/tests/examples out of Apps Script uploads.
+README.md
+*.test.js
+*.config.example.gs
+.clasp.json
+.claspignore
