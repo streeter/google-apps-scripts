@@ -132,6 +132,11 @@ function syncOneFeed_(cfg, mapping, today) {
       : cfg.defaultAttendeeEmails) || [],
   );
   const sourceAttendees = buildSourceAttendees_(attendees, mapping.calendarId);
+  const activePeerFeedHashes = buildActivePeerFeedHashes_(
+    cfg,
+    mapping.calendarId,
+    feedHash,
+  );
   const driveOpts = buildDriveOptions_(cfg, mapping);
   const driveDurationCache = {};
   console.log('[FEED] Processing "' + feedName + '" -> ' + mapping.calendarId);
@@ -270,6 +275,23 @@ function syncOneFeed_(cfg, mapping, today) {
     createResource.extendedProperties.private.syncHash = createHash;
 
     if (!existing) {
+      const duplicateResolution = resolveDuplicateBeforeCreate_(
+        mapping.calendarId,
+        createResource,
+        activePeerFeedHashes,
+      );
+      if (duplicateResolution.deleted)
+        stats.deleted += duplicateResolution.deleted;
+      if (duplicateResolution.skipCreate) {
+        stats.skipped++;
+        console.info(
+          '[SKIP] Not creating duplicate event "' +
+            (effectiveEvt.summary || "(No title)") +
+            '" because an actively synced peer event already exists',
+        );
+        return;
+      }
+
       const inserted = Calendar.Events.insert(
         createResource,
         mapping.calendarId,
@@ -1103,6 +1125,179 @@ function buildPlaceNameAddressRules_(cfg, mapping) {
  */
 function buildSourceAttendees_(attendees, calendarId) {
   return uniqueEmails_((attendees || []).concat([calendarId]));
+}
+
+/**
+ * Returns feed hashes for other configured feeds actively syncing into the same calendar.
+ */
+function buildActivePeerFeedHashes_(cfg, calendarId, currentFeedHash) {
+  const out = {};
+  ((cfg && cfg.feedMappings) || []).forEach(function (mapping) {
+    if (!mapping || !mapping.feedUrl || mapping.calendarId !== calendarId)
+      return;
+    const feedHash = sha256Hex_(mapping.feedUrl).slice(0, 16);
+    if (feedHash === currentFeedHash) return;
+    out[feedHash] = true;
+  });
+  return out;
+}
+
+/**
+ * Handles exact duplicate events before creating a new managed source event.
+ * If a duplicate is managed by another active feed on this calendar, skip this create.
+ * Otherwise remove duplicate non-active events and allow the managed create to proceed.
+ */
+function resolveDuplicateBeforeCreate_(
+  calendarId,
+  createResource,
+  activePeerFeedHashes,
+) {
+  const duplicates = findDuplicateEventsForResource_(
+    calendarId,
+    createResource,
+  );
+  let hasActivePeerDuplicate = false;
+  let deleted = 0;
+
+  duplicates.forEach(function (duplicate) {
+    if (isActivePeerSourceEvent_(duplicate, activePeerFeedHashes)) {
+      hasActivePeerDuplicate = true;
+      return;
+    }
+
+    Calendar.Events.remove(calendarId, duplicate.id);
+    deleted++;
+    console.log(
+      '[DELETE] Deleted duplicate non-active event "' +
+        (duplicate.summary || "(No title)") +
+        '" (' +
+        duplicate.id +
+        ")",
+    );
+  });
+
+  return {
+    skipCreate: hasActivePeerDuplicate,
+    deleted: deleted,
+  };
+}
+
+/**
+ * Finds exact event duplicates by title, start, end, and description.
+ */
+function findDuplicateEventsForResource_(calendarId, resource) {
+  const out = [];
+  const startDate = eventBoundaryToDate_(resource.start);
+  const endDate = eventBoundaryToDate_(resource.end || resource.start);
+  const listOpts = {
+    showDeleted: false,
+    singleEvents: false,
+    maxResults: 250,
+  };
+
+  if (startDate && endDate) {
+    listOpts.timeMin = new Date(startDate.getTime() - 60 * 1000).toISOString();
+    listOpts.timeMax = new Date(endDate.getTime() + 60 * 1000).toISOString();
+  }
+
+  let pageToken;
+  do {
+    listOpts.pageToken = pageToken;
+    const resp = Calendar.Events.list(calendarId, listOpts);
+    (resp.items || []).forEach(function (ev) {
+      if (isDuplicateEventResource_(ev, resource)) out.push(ev);
+    });
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
+
+  return out;
+}
+
+/**
+ * Returns true when an event resource exactly duplicates another source event.
+ */
+function isDuplicateEventResource_(candidate, resource) {
+  if (!candidate || !resource) return false;
+  return (
+    normalizeDuplicateText_(candidate.summary) ===
+      normalizeDuplicateText_(resource.summary) &&
+    normalizeDuplicateText_(candidate.description) ===
+      normalizeDuplicateText_(resource.description) &&
+    eventBoundaryKey_(candidate.start) === eventBoundaryKey_(resource.start) &&
+    eventBoundaryKey_(candidate.end) === eventBoundaryKey_(resource.end)
+  );
+}
+
+/**
+ * Returns true when a duplicate belongs to another active feed syncing here.
+ */
+function isActivePeerSourceEvent_(ev, activePeerFeedHashes) {
+  const privateProps = ((ev || {}).extendedProperties || {}).private || {};
+  const feedHash = privateProps.sourceFeed || "";
+  const syncKey = privateProps.syncKey || "";
+  return !!(
+    privateProps.managedKind === "source" &&
+    feedHash &&
+    activePeerFeedHashes &&
+    activePeerFeedHashes[feedHash] &&
+    !isDriveSyncKey_(syncKey) &&
+    !isArrivalSyncKey_(syncKey)
+  );
+}
+
+/**
+ * Normalizes title/description text for duplicate comparison.
+ */
+function normalizeDuplicateText_(value) {
+  const generatedByPattern = new RegExp(
+    "\\n*" + escapeRegExp_(GENERATED_BY_DESCRIPTION) + "\\s*$",
+  );
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(generatedByPattern, "")
+    .trim();
+}
+
+/**
+ * Escapes a string for use inside a RegExp.
+ */
+function escapeRegExp_(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Converts Calendar event start/end shapes into stable comparison keys.
+ */
+function eventBoundaryKey_(boundary) {
+  if (!boundary) return "";
+  if (boundary.date) return "date:" + String(boundary.date);
+  if (boundary.dateTime) {
+    const parsed = new Date(boundary.dateTime);
+    if (!isNaN(parsed.getTime())) return "dateTime:" + parsed.toISOString();
+    return (
+      "dateTime:" +
+      String(boundary.dateTime) +
+      "|" +
+      String(boundary.timeZone || "")
+    );
+  }
+  return "";
+}
+
+/**
+ * Converts Calendar event start/end shapes into dates for Calendar list windows.
+ */
+function eventBoundaryToDate_(boundary) {
+  if (!boundary) return null;
+  if (boundary.dateTime) {
+    const dateTime = new Date(boundary.dateTime);
+    if (!isNaN(dateTime.getTime())) return dateTime;
+  }
+  if (boundary.date) {
+    const date = new Date(boundary.date + "T00:00:00");
+    if (!isNaN(date.getTime())) return date;
+  }
+  return null;
 }
 
 /**

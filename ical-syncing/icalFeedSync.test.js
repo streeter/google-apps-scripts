@@ -1011,6 +1011,157 @@ test("syncOneFeed_ uses defaults only when attendeeEmails is omitted", () => {
   );
 });
 
+test("syncOneFeed_ skips duplicate event from another active feed", () => {
+  const ctx = loadIcalSyncContext();
+  const currentFeedUrl = "https://example.com/current.ics";
+  const peerFeedUrl = "https://example.com/peer.ics";
+  const peerFeedHash = ctx.sha256Hex_(peerFeedUrl).slice(0, 16);
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:uid-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "DESCRIPTION:Shared event",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.list = () => ({
+    items: [
+      {
+        id: "peer-1",
+        summary: "Practice",
+        description:
+          "Shared event\n\nGenerated with github.com/streeter/google-apps-scripts",
+        start: { dateTime: "2099-05-01T15:00:00.000Z" },
+        end: { dateTime: "2099-05-01T16:00:00.000Z" },
+        extendedProperties: {
+          private: {
+            managedKind: "source",
+            sourceFeed: peerFeedHash,
+            syncKey: peerFeedHash + ":peer-uid",
+          },
+        },
+      },
+    ],
+  });
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+      feedMappings: [
+        { feedUrl: currentFeedUrl, calendarId: "calendar-1" },
+        { feedUrl: peerFeedUrl, calendarId: "calendar-1" },
+      ],
+    },
+    {
+      name: "Current Feed",
+      feedUrl: currentFeedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 0);
+  assert.equal(stats.skipped, 1);
+});
+
+test("syncOneFeed_ deletes unmanaged duplicate before creating managed event", () => {
+  const ctx = loadIcalSyncContext();
+  const inserted = [];
+  const removed = [];
+  const currentFeedUrl = "https://example.com/current.ics";
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:uid-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "DESCRIPTION:Shared event",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.list = () => ({
+    items: [
+      {
+        id: "manual-1",
+        summary: "Practice",
+        description: "Shared event",
+        start: { dateTime: "2099-05-01T15:00:00.000Z" },
+        end: { dateTime: "2099-05-01T16:00:00.000Z" },
+      },
+    ],
+  });
+  ctx.Calendar.Events.insert = (resource, calendarId) => {
+    assert.equal(calendarId, "calendar-1");
+    inserted.push(resource);
+    return {
+      id: "source-created-1",
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    removed.push(eventId);
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+      feedMappings: [{ feedUrl: currentFeedUrl, calendarId: "calendar-1" }],
+    },
+    {
+      name: "Current Feed",
+      feedUrl: currentFeedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.deleted, 1);
+  assert.equal(stats.created, 1);
+  assert.equal(JSON.stringify(removed), JSON.stringify(["manual-1"]));
+  assert.equal(inserted.length, 1);
+});
+
 test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   const ctx = loadIcalSyncContext();
   const inserts = [];
@@ -1376,4 +1527,103 @@ test("syncOneFeed_ preserves a target calendar decline and removes placeholders"
       self: true,
     }),
   );
+});
+
+test("syncOneFeed_ deletes managed future events missing from feed", () => {
+  const ctx = loadIcalSyncContext();
+  const removed = [];
+  const feedUrl = "https://example.com/sports.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const sourceSyncKey = ctx.buildSyncKey_(feedHash, "uid-1", "");
+  const arrivalSyncKey = ctx.buildArrivalSyncKey_(sourceSyncKey);
+  const driveSyncKey = ctx.buildDriveSyncKey_(sourceSyncKey);
+
+  ctx.fetchIcs_ = () => ["BEGIN:VCALENDAR", "END:VCALENDAR"].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({
+    [sourceSyncKey]: {
+      id: "source-1",
+      summary: "Missing Soccer Game",
+      start: { dateTime: "2099-05-01T15:30:00Z" },
+      end: { dateTime: "2099-05-01T16:30:00Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: sourceSyncKey,
+        },
+      },
+    },
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({
+    [arrivalSyncKey]: {
+      id: "arrival-1",
+      summary: "Advanced arrival for Missing Soccer Game",
+      start: { dateTime: "2099-05-01T15:00:00Z" },
+      end: { dateTime: "2099-05-01T15:30:00Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "arrival",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: arrivalSyncKey,
+          sourceSyncKey: sourceSyncKey,
+        },
+      },
+    },
+  });
+  ctx.loadExistingDriveEventsByKey_ = () => ({
+    [driveSyncKey]: {
+      id: "drive-1",
+      summary: "Drive to Missing Soccer Game",
+      start: { dateTime: "2099-05-01T14:35:00Z" },
+      end: { dateTime: "2099-05-01T15:00:00Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "drive",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: driveSyncKey,
+          sourceSyncKey: sourceSyncKey,
+        },
+      },
+    },
+  });
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    removed.push(eventId);
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: true,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: true,
+      feedMappings: [{ feedUrl: feedUrl, calendarId: "calendar-1" }],
+    },
+    {
+      name: "Sports Feed",
+      feedUrl: feedUrl,
+      calendarId: "calendar-1",
+      attendeeEmails: [],
+      titlePrefix: "",
+      addDriveTimePlaceholders: true,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.deleted, 1);
+  assert.equal(stats.arrivalDeleted, 1);
+  assert.equal(stats.driveDeleted, 1);
+  assert.deepEqual(removed.sort(), ["arrival-1", "drive-1", "source-1"]);
 });

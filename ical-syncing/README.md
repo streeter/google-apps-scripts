@@ -117,6 +117,7 @@ function getIcalSyncConfig() {
 - Per-feed `addDriveTimePlaceholders` controls whether drive placeholders are managed for that feed.
 - Placeholders are only created when computed drive time is strictly greater than `minDriveMinutesToCreate` (default `10`).
 - Drive placeholders are skipped for all-day events, events without a location, unroutable addresses, and pre-today events.
+- Before creating a synced source event, the script checks for exact duplicates on the target calendar by title, start/end time, and description. It skips duplicates already managed by another active feed for that same target calendar, and deletes non-active duplicates before creating the managed event.
 - Drive placeholders are tied to source synced events using metadata (`sourceSyncKey` and `sourceEventId`) and are managed/deleted safely.
 - Arrival placeholders are tied to source synced events using metadata and are managed/deleted safely.
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
