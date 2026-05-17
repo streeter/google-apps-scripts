@@ -77,7 +77,8 @@ The main script expects:
 ```javascript
 function getIcalSyncConfig() {
   return {
-    triggerEveryMinutes: 15,
+    triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22],
+    triggerEveryMinutes: 120,
     deleteMissingFromFeed: true,
     addDriveTimePlaceholders: false,
     defaultOriginAddress: "123 Main St, Brooklyn, NY 11201",
@@ -106,11 +107,14 @@ function getIcalSyncConfig() {
 }
 ```
 
-`triggerEveryMinutes` supports `1`, `5`, `10`, `15`, `30`, and multiples of `60` (for example `60` hourly, `120` every 2 hours, `1440` daily).
+`triggerHours` is an optional array of daily run hours in the Apps Script project timezone. This project is set to `America/New_York`, so `triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22]` runs at 6am, every 2 hours during the day, and 10pm Eastern.
+
+`triggerEveryMinutes` remains available as a fallback when `triggerHours` is empty. It supports `1`, `5`, `10`, `15`, `30`, and multiples of `60` (for example `60` hourly, `120` every 2 hours, `1440` daily).
 
 ## Notes
 
 - `feedMappings` can include many feed -> calendar routes.
+- `triggerHours` takes precedence over `triggerEveryMinutes` when non-empty.
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
 - Per-feed `skipAllDayEvents` filters out all-day source events for that feed when set to `true`. Default: `false`.
 - `placeNameAddressMap` lets you translate venue names in locations into routable addresses before drive lookup.

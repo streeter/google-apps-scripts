@@ -11,6 +11,7 @@ function loadIcalSyncContext() {
     method: null,
     value: null,
     created: false,
+    createdTriggers: [],
   };
   const context = {
     console: {
@@ -45,6 +46,7 @@ function loadIcalSyncContext() {
           .digest();
         return Array.from(hash.values());
       },
+      sleep: () => {},
     },
     ScriptApp: {
       getProjectTriggers: () => [],
@@ -59,6 +61,13 @@ function loadIcalSyncContext() {
           }),
           everyDays: () => ({
             create: () => {},
+          }),
+          atHour: () => ({
+            nearMinute: () => ({
+              everyDays: () => ({
+                create: () => {},
+              }),
+            }),
           }),
         }),
       }),
@@ -134,6 +143,22 @@ function loadIcalSyncContext() {
           triggerState.created = true;
         },
       }),
+      atHour: (hour) => ({
+        nearMinute: (minute) => ({
+          everyDays: (n) => ({
+            create: () => {
+              triggerState.method = "scheduledHours";
+              triggerState.value = { hour, minute, everyDays: n };
+              triggerState.created = true;
+              triggerState.createdTriggers.push({
+                hour,
+                minute,
+                everyDays: n,
+              });
+            },
+          }),
+        }),
+      }),
     }),
   });
 
@@ -196,6 +221,19 @@ test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
   assert.equal(cfg.feedMappings[0].skipAllDayEvents, false);
 });
 
+test("getIcalSyncConfig_ defaults triggerHours to empty array", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+
+  assert.equal(JSON.stringify(cfg.triggerHours), JSON.stringify([]));
+});
+
 test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
   const ctx = loadIcalSyncContext();
   const calls = [];
@@ -225,6 +263,14 @@ test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
   ]);
 });
 
+test("normalizeTriggerHours_ sorts and de-duplicates hours", () => {
+  const ctx = loadIcalSyncContext();
+
+  const hours = ctx.normalizeTriggerHours_([22, 6, 8, 6, 20]);
+
+  assert.equal(JSON.stringify(hours), JSON.stringify([6, 8, 20, 22]));
+});
+
 test("setupIcalFeedSyncTrigger uses hourly trigger when triggerEveryMinutes is 60", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
@@ -241,6 +287,31 @@ test("setupIcalFeedSyncTrigger uses hourly trigger when triggerEveryMinutes is 6
   assert.equal(ctx.__triggerState.created, true);
 });
 
+test("setupIcalFeedSyncTrigger uses explicit scheduled hours when configured", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    triggerHours: [22, 6, 8, 10, 12, 14, 16, 18, 20],
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  ctx.setupIcalFeedSyncTrigger();
+
+  assert.equal(ctx.__triggerState.method, "scheduledHours");
+  assert.deepEqual(ctx.__triggerState.createdTriggers, [
+    { hour: 6, minute: 0, everyDays: 1 },
+    { hour: 8, minute: 0, everyDays: 1 },
+    { hour: 10, minute: 0, everyDays: 1 },
+    { hour: 12, minute: 0, everyDays: 1 },
+    { hour: 14, minute: 0, everyDays: 1 },
+    { hour: 16, minute: 0, everyDays: 1 },
+    { hour: 18, minute: 0, everyDays: 1 },
+    { hour: 20, minute: 0, everyDays: 1 },
+    { hour: 22, minute: 0, everyDays: 1 },
+  ]);
+});
+
 test("applyTriggerInterval_ rejects unsupported minute values", () => {
   const ctx = loadIcalSyncContext();
   const clock = {
@@ -252,6 +323,15 @@ test("applyTriggerInterval_ rejects unsupported minute values", () => {
   assert.throws(
     () => ctx.applyTriggerInterval_(clock, 45),
     /Unsupported triggerEveryMinutes value/,
+  );
+});
+
+test("normalizeTriggerHours_ rejects invalid hours", () => {
+  const ctx = loadIcalSyncContext();
+
+  assert.throws(
+    () => ctx.normalizeTriggerHours_([6, 24]),
+    /triggerHours values must be integers from 0 through 23/,
   );
 });
 
@@ -457,6 +537,32 @@ test("getDriveMinutes_ logs exception details on lookup failure", () => {
   assert.ok(errors.length > 0);
   assert.match(errors[0], /QuotaError/);
   assert.match(errors[0], /quota exceeded/);
+});
+
+test("calendarEventInsert_ retries calendar usage limit failures", () => {
+  const ctx = loadIcalSyncContext();
+  const sleeps = [];
+  let attempts = 0;
+  ctx.Utilities.sleep = (ms) => sleeps.push(ms);
+  ctx.Calendar.Events.insert = () => {
+    attempts++;
+    if (attempts < 3) {
+      throw new Error(
+        "GoogleJsonResponseException: Calendar usage limits exceeded.",
+      );
+    }
+    return { id: "created-1" };
+  };
+
+  const inserted = ctx.calendarEventInsert_(
+    { summary: "Practice" },
+    "calendar-1",
+    { sendUpdates: "none" },
+  );
+
+  assert.equal(inserted.id, "created-1");
+  assert.equal(attempts, 3);
+  assert.equal(sleeps.length, 2);
 });
 
 test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () => {
@@ -1087,6 +1193,81 @@ test("syncOneFeed_ optionally filters out all-day events for a feed", () => {
   assert.equal(stats.skipped, 1);
   assert.equal(inserts.length, 1);
   assert.equal(inserts[0].summary, "Practice");
+});
+
+test("syncOneFeed_ leaves unchanged events unpatched", () => {
+  const ctx = loadIcalSyncContext();
+  const feedUrl = "https://example.com/feed.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const sourceSyncKey = ctx.buildSyncKey_(feedHash, "uid-1", "");
+  let patchCalls = 0;
+
+  const icsText = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VEVENT",
+    "UID:uid-1",
+    "DTSTART:20990501T150000Z",
+    "DTEND:20990501T160000Z",
+    "SUMMARY:Practice",
+    "LOCATION:Seattle, WA",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\n");
+  const parsedEvent = ctx.parseIcs_(icsText).events[0];
+
+  ctx.fetchIcs_ = () => icsText;
+  ctx.loadExistingEventsByKey_ = () => ({
+    [sourceSyncKey]: {
+      id: "source-1",
+      summary: "Practice",
+      start: { dateTime: "2099-05-01T15:00:00.000Z" },
+      end: { dateTime: "2099-05-01T16:00:00.000Z" },
+      attendees: [{ email: "calendar-1" }],
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: sourceSyncKey,
+          syncHash: ctx.computeEventHash_(parsedEvent, ["calendar-1"]),
+        },
+      },
+    },
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    patchCalls++;
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+    },
+    {
+      name: "Stable Feed",
+      feedUrl: feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(patchCalls, 0);
+  assert.equal(stats.updated, 0);
+  assert.equal(stats.unchanged, 1);
 });
 
 test("syncOneFeed_ skips duplicate event from another active feed", () => {

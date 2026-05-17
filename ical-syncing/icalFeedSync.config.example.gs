@@ -5,9 +5,14 @@
 
 function getIcalSyncConfig() {
   return {
-    // Trigger frequency for setupIcalFeedSyncTrigger()
+    // Optional explicit daily trigger hours in the script timezone.
+    // This project is configured for America/New_York in appsscript.json.
+    // Example below runs at 6am, every 2 hours during the day, and 10pm Eastern.
+    triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22],
+
+    // Fallback frequency for setupIcalFeedSyncTrigger() when triggerHours is empty.
     // Supports 1, 5, 10, 15, 30 and multiples of 60 (60=hourly, 1440=daily)
-    triggerEveryMinutes: 60,
+    triggerEveryMinutes: 120,
 
     // If true, remove future local events previously synced from a feed
     // when they no longer exist in that feed.
