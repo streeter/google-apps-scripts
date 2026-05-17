@@ -1,0 +1,12 @@
+#!/bin/sh
+
+set -eu
+
+echo "Checking formatting with Prettier..."
+
+if ! npm run lint; then
+  echo
+  echo "Commit blocked: formatting check failed."
+  echo "Run 'npm run format' and retry the commit."
+  exit 1
+fi

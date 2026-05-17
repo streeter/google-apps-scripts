@@ -32,4 +32,5 @@ My collection of [Google's App Script](https://script.google.com/) scripts
 - Run tests locally with `npm test`.
 - Run formatting lint with `npm run lint`.
 - Auto-format checked files with `npm run format`.
+- Enable the repo hook with `git config core.hooksPath .githooks` to block commits when formatting is off.
 - Current suite: [`ical-syncing/icalFeedSync.test.js`](ical-syncing/icalFeedSync.test.js).
