@@ -107,7 +107,12 @@ function normalizeTriggerHours_(triggerHours) {
 
   triggerHours.forEach(function (hour) {
     const value = Number(hour);
-    if (!isFinite(value) || value !== Math.floor(value) || value < 0 || value > 23) {
+    if (
+      !isFinite(value) ||
+      value !== Math.floor(value) ||
+      value < 0 ||
+      value > 23
+    ) {
       throw new Error(
         "triggerHours values must be integers from 0 through 23.",
       );
@@ -146,10 +151,7 @@ function syncIcalFeeds() {
       const feedName = mapping.name || mapping.feedUrl;
       const errorText = String(e);
       console.error(
-        "[ERROR] Failed syncing feed " +
-          feedName +
-          ": " +
-          errorText,
+        "[ERROR] Failed syncing feed " + feedName + ": " + errorText,
       );
       results.push({
         feed: feedName,
@@ -821,7 +823,7 @@ function calendarEventRemove_(calendarId, eventId) {
 
 function isRetryableCalendarWriteError_(err) {
   const text = String(
-    (err && (err.message || err.details || err.toString && err.toString())) ||
+    (err && (err.message || err.details || (err.toString && err.toString()))) ||
       "",
   ).toLowerCase();
   return (
@@ -1665,11 +1667,12 @@ function reconcileArrivalPlaceholder_(
     attendees,
   );
   seenArrival[arrivalSyncKey] = true;
-  const existingArrivalHash =
-    ((existingArrival && existingArrival.extendedProperties) || {}).private
-      ? (((existingArrival.extendedProperties || {}).private || {}).syncHash ||
-          "")
-      : "";
+  const existingArrivalHash = (
+    (existingArrival && existingArrival.extendedProperties) ||
+    {}
+  ).private
+    ? ((existingArrival.extendedProperties || {}).private || {}).syncHash || ""
+    : "";
 
   if (!existingArrival) {
     calendarEventInsert_(arrivalResource, mapping.calendarId, {
@@ -1938,11 +1941,12 @@ function reconcileDrivePlaceholder_(
     drivePlan.previousEventId || "",
   );
   seenDrive[driveSyncKey] = true;
-  const existingDriveHash =
-    ((existingDrive && existingDrive.extendedProperties) || {}).private
-      ? (((existingDrive.extendedProperties || {}).private || {}).syncHash ||
-          "")
-      : "";
+  const existingDriveHash = (
+    (existingDrive && existingDrive.extendedProperties) ||
+    {}
+  ).private
+    ? ((existingDrive.extendedProperties || {}).private || {}).syncHash || ""
+    : "";
 
   if (!existingDrive) {
     calendarEventInsert_(driveResource, mapping.calendarId, {

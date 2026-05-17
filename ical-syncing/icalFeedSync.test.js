@@ -321,9 +321,21 @@ test("syncIcalFeeds processes all feeds and throws a summary error at the end", 
   ctx.Logger.log = (msg) => logs.push(String(msg));
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { name: "Feed A", feedUrl: "https://example.com/a.ics", calendarId: "cal-a" },
-      { name: "Feed B", feedUrl: "https://example.com/b.ics", calendarId: "cal-b" },
-      { name: "Feed C", feedUrl: "https://example.com/c.ics", calendarId: "cal-c" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal-a",
+      },
+      {
+        name: "Feed B",
+        feedUrl: "https://example.com/b.ics",
+        calendarId: "cal-b",
+      },
+      {
+        name: "Feed C",
+        feedUrl: "https://example.com/c.ics",
+        calendarId: "cal-c",
+      },
     ],
   });
   ctx.syncOneFeed_ = (_cfg, mapping) => {
@@ -340,7 +352,10 @@ test("syncIcalFeeds processes all feeds and throws a summary error at the end", 
   );
   assert.deepEqual(syncedFeeds, ["Feed A", "Feed B", "Feed C"]);
   assert.equal(errors.length, 1);
-  assert.match(errors[0], /\[ERROR\] Failed syncing feed Feed B: Error: B failed/);
+  assert.match(
+    errors[0],
+    /\[ERROR\] Failed syncing feed Feed B: Error: B failed/,
+  );
   assert.equal(logs.length, 1);
   assert.match(logs[0], /"Feed A"/);
   assert.match(logs[0], /"Feed B"/);
