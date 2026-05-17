@@ -131,6 +131,7 @@ function syncIcalFeeds() {
   const cfg = getIcalSyncConfig_();
   const today = startOfToday_();
   const results = [];
+  const errors = [];
   console.log(
     "[SYNC] Starting iCal feed sync for " +
       cfg.feedMappings.length +
@@ -142,21 +143,32 @@ function syncIcalFeeds() {
     try {
       results.push(syncOneFeed_(cfg, mapping, today));
     } catch (e) {
+      const feedName = mapping.name || mapping.feedUrl;
+      const errorText = String(e);
       console.error(
         "[ERROR] Failed syncing feed " +
-          (mapping.name || mapping.feedUrl) +
+          feedName +
           ": " +
-          String(e),
+          errorText,
       );
       results.push({
-        feed: mapping.name || mapping.feedUrl,
-        error: String(e),
+        feed: feedName,
+        error: errorText,
       });
+      errors.push(feedName + ": " + errorText);
     }
   });
 
   console.log("[SYNC] Finished iCal feed sync");
   Logger.log(JSON.stringify(results, null, 2));
+  if (errors.length) {
+    throw new Error(
+      "syncIcalFeeds completed with " +
+        errors.length +
+        " error(s): " +
+        errors.join(" | "),
+    );
+  }
 }
 
 /**

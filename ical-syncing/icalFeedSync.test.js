@@ -312,6 +312,41 @@ test("setupIcalFeedSyncTrigger uses explicit scheduled hours when configured", (
   ]);
 });
 
+test("syncIcalFeeds processes all feeds and throws a summary error at the end", () => {
+  const ctx = loadIcalSyncContext();
+  const logs = [];
+  const errors = [];
+  const syncedFeeds = [];
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.Logger.log = (msg) => logs.push(String(msg));
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { name: "Feed A", feedUrl: "https://example.com/a.ics", calendarId: "cal-a" },
+      { name: "Feed B", feedUrl: "https://example.com/b.ics", calendarId: "cal-b" },
+      { name: "Feed C", feedUrl: "https://example.com/c.ics", calendarId: "cal-c" },
+    ],
+  });
+  ctx.syncOneFeed_ = (_cfg, mapping) => {
+    syncedFeeds.push(mapping.name);
+    if (mapping.name === "Feed B") {
+      throw new Error("B failed");
+    }
+    return { feed: mapping.name, ok: true };
+  };
+
+  assert.throws(
+    () => ctx.syncIcalFeeds(),
+    /syncIcalFeeds completed with 1 error\(s\): Feed B: Error: B failed/,
+  );
+  assert.deepEqual(syncedFeeds, ["Feed A", "Feed B", "Feed C"]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\[ERROR\] Failed syncing feed Feed B: Error: B failed/);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /"Feed A"/);
+  assert.match(logs[0], /"Feed B"/);
+  assert.match(logs[0], /"Feed C"/);
+});
+
 test("applyTriggerInterval_ rejects unsupported minute values", () => {
   const ctx = loadIcalSyncContext();
   const clock = {
