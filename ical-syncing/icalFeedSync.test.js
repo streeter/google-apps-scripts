@@ -183,6 +183,19 @@ test("getIcalSyncConfig_ defaults per-feed titlePrefix to empty string", () => {
   assert.equal(cfg.feedMappings[0].titlePrefix, "");
 });
 
+test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+
+  assert.equal(cfg.feedMappings[0].skipAllDayEvents, false);
+});
+
 test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
   const ctx = loadIcalSyncContext();
   const calls = [];
@@ -1009,6 +1022,71 @@ test("syncOneFeed_ uses defaults only when attendeeEmails is omitted", () => {
     JSON.stringify(inserts[0].attendees),
     JSON.stringify([{ email: "coach@example.com" }, { email: "calendar-1" }]),
   );
+});
+
+test("syncOneFeed_ optionally filters out all-day events for a feed", () => {
+  const ctx = loadIcalSyncContext();
+  const inserts = [];
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:all-day-1",
+      "DTSTART;VALUE=DATE:20990501",
+      "DTEND;VALUE=DATE:20990502",
+      "SUMMARY:Tournament Day",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:timed-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = (resource) => {
+    inserts.push(resource);
+    return {
+      id: "source-created-" + inserts.length,
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+    },
+    {
+      name: "No All-Day",
+      feedUrl: "https://example.com/feed.ics",
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      skipAllDayEvents: true,
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 1);
+  assert.equal(stats.skipped, 1);
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].summary, "Practice");
 });
 
 test("syncOneFeed_ skips duplicate event from another active feed", () => {

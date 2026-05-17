@@ -198,6 +198,15 @@ function syncOneFeed_(cfg, mapping, today) {
 
   parsed.events.forEach(function (evt) {
     const effectiveEvt = applyEventTitlePrefix_(evt, mapping.titlePrefix);
+    if (mapping.skipAllDayEvents && isAllDayEvent_(effectiveEvt)) {
+      stats.skipped++;
+      console.info(
+        '[SKIP] All-day event filtered "' +
+          (effectiveEvt.summary || "(No title)") +
+          '"',
+      );
+      return;
+    }
     const syncKey = buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey);
     const arrivalSyncKey = buildArrivalSyncKey_(syncKey);
     const driveSyncKey = buildDriveSyncKey_(syncKey);
@@ -603,6 +612,7 @@ function getIcalSyncConfig_() {
       m.attendeeEmails = [];
     }
     if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
+    if (typeof m.skipAllDayEvents !== "boolean") m.skipAllDayEvents = false;
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
     if (typeof m.originAddress !== "string") m.originAddress = "";

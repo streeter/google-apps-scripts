@@ -94,6 +94,7 @@ function getIcalSyncConfig() {
         calendarId: "your_calendar_id@group.calendar.google.com",
         titlePrefix: "[Sports]",
         attendeeEmails: [],
+        skipAllDayEvents: false,
         addDriveTimePlaceholders: true,
         originAddress: "",
         placeNameAddressMap: {
@@ -111,6 +112,7 @@ function getIcalSyncConfig() {
 
 - `feedMappings` can include many feed -> calendar routes.
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
+- Per-feed `skipAllDayEvents` filters out all-day source events for that feed when set to `true`. Default: `false`.
 - `placeNameAddressMap` lets you translate venue names in locations into routable addresses before drive lookup.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when provided, including an empty list.
 - The script never implicitly adds the account running Apps Script; include that email explicitly if you want it as an attendee.

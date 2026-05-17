@@ -46,6 +46,9 @@ function getIcalSyncConfig() {
         // If provided as [], no extra attendees are added.
         attendeeEmails: [],
 
+        // Optional per-feed filter. When true, all-day source events are skipped.
+        skipAllDayEvents: false,
+
         // Optional per-feed drive placeholder settings.
         addDriveTimePlaceholders: true,
         // Optional per-feed origin override. If empty, defaultOriginAddress is used.
@@ -65,6 +68,7 @@ function getIcalSyncConfig() {
       //   feedUrl: "https://example.com/another.ics",
       //   calendarId: "another_calendar_id@group.calendar.google.com",
       //   titlePrefix: "[Another]",
+      //   skipAllDayEvents: true,
       //   attendeeEmails: ["special-person@yourcompany.com"]
       // }
     ],
