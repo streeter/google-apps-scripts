@@ -368,11 +368,20 @@ function syncOneFeed_(cfg, mapping, today) {
         return;
       }
 
-      const inserted = calendarEventInsert_(
-        createResource,
-        mapping.calendarId,
-        { sendUpdates: "none" },
-      );
+      let inserted;
+      try {
+        inserted = calendarEventInsert_(createResource, mapping.calendarId, {
+          sendUpdates: "none",
+        });
+      } catch (e) {
+        console.error(
+          '[ERROR] Failed creating event "' +
+            (effectiveEvt.summary || "(No title)") +
+            '": ' +
+            String(e),
+        );
+        throw e;
+      }
       stats.created++;
       console.log('[CREATE] "' + (effectiveEvt.summary || "(No title)") + '"');
       const arrivalAnchorStart = reconcileArrivalPlaceholder_(

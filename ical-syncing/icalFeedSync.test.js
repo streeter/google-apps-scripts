@@ -1288,6 +1288,64 @@ test("syncOneFeed_ optionally filters out all-day events for a feed", () => {
   assert.equal(inserts[0].summary, "Practice");
 });
 
+test("syncOneFeed_ logs the event title when create insert fails", () => {
+  const ctx = loadIcalSyncContext();
+  const errors = [];
+
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:uid-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("insert failed");
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  assert.throws(() => {
+    ctx.syncOneFeed_(
+      {
+        deleteMissingFromFeed: false,
+        defaultAttendeeEmails: [],
+        addDriveTimePlaceholders: false,
+      },
+      {
+        name: "Practice Feed",
+        feedUrl: "https://example.com/feed.ics",
+        calendarId: "calendar-1",
+        titlePrefix: "",
+        addDriveTimePlaceholders: false,
+        originAddress: "",
+      },
+      new Date("2026-01-01T00:00:00Z"),
+    );
+  }, /insert failed/);
+
+  assert.ok(
+    errors.some(
+      (msg) =>
+        msg.includes('[ERROR] Failed creating event "Practice"') &&
+        msg.includes("insert failed"),
+    ),
+  );
+});
+
 test("syncOneFeed_ leaves unchanged events unpatched", () => {
   const ctx = loadIcalSyncContext();
   const feedUrl = "https://example.com/feed.ics";
