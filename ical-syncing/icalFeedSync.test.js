@@ -362,6 +362,43 @@ test("syncIcalFeeds processes all feeds and throws a summary error at the end", 
   assert.match(logs[0], /"Feed C"/);
 });
 
+test("syncIcalFeeds groups identical per-feed failures in the summary error", () => {
+  const ctx = loadIcalSyncContext();
+  const errors = [];
+
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      {
+        name: "Chestnutwold",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal-a",
+      },
+      {
+        name: "Haverford School District",
+        feedUrl: "https://example.com/b.ics",
+        calendarId: "cal-b",
+      },
+    ],
+  });
+  ctx.syncOneFeed_ = () => {
+    throw new Error(
+      "GoogleJsonResponseException: API call to calendar.events.insert failed with error: Calendar usage limits exceeded.",
+    );
+  };
+
+  assert.throws(
+    () => ctx.syncIcalFeeds(),
+    /syncIcalFeeds completed with 1 error\(s\): Chestnutwold, Haverford School District: Error: GoogleJsonResponseException: API call to calendar\.events\.insert failed with error: Calendar usage limits exceeded\./,
+  );
+  assert.equal(errors.length, 2);
+  assert.match(errors[0], /\[ERROR\] Failed syncing feed Chestnutwold:/);
+  assert.match(
+    errors[1],
+    /\[ERROR\] Failed syncing feed Haverford School District:/,
+  );
+});
+
 test("applyTriggerInterval_ rejects unsupported minute values", () => {
   const ctx = loadIcalSyncContext();
   const clock = {

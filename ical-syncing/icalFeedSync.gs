@@ -164,13 +164,47 @@ function syncIcalFeeds() {
   console.log("[SYNC] Finished iCal feed sync");
   Logger.log(JSON.stringify(results, null, 2));
   if (errors.length) {
+    const groupedErrors = groupSyncErrors_(errors);
     throw new Error(
       "syncIcalFeeds completed with " +
-        errors.length +
+        groupedErrors.length +
         " error(s): " +
-        errors.join(" | "),
+        groupedErrors.join(" | "),
     );
   }
+}
+
+function groupSyncErrors_(errors) {
+  const grouped = {};
+  const orderedMessages = [];
+
+  errors.forEach(function (entry) {
+    const separator = ": ";
+    const splitIndex = entry.indexOf(separator);
+    if (splitIndex === -1) {
+      if (!grouped[entry]) {
+        grouped[entry] = [];
+        orderedMessages.push(entry);
+      }
+      return;
+    }
+
+    const feedName = entry.slice(0, splitIndex);
+    const errorText = entry.slice(splitIndex + separator.length);
+    if (!grouped[errorText]) {
+      grouped[errorText] = [];
+      orderedMessages.push(errorText);
+    }
+    grouped[errorText].push(feedName);
+  });
+
+  return orderedMessages.map(function (message) {
+    const feedNames = grouped[message];
+    if (!feedNames || feedNames.length === 0) {
+      return message;
+    }
+    return feedNames.join(", ") + ": " + message;
+  });
 }
 
 /**
