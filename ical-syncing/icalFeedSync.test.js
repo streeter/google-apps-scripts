@@ -777,6 +777,49 @@ test("resolvePlaceNameAddress_ maps venue names to canonical addresses", () => {
   assert.equal(untouched.text, "Some Other Venue");
 });
 
+test("applyPlaceNameAddressToEvent_ rewrites matching event locations", () => {
+  const ctx = loadIcalSyncContext();
+  const evt = {
+    uid: "uid-1",
+    summary: "Practice",
+    location: "Kaiserman JCC- Field 2",
+  };
+  const rules = [
+    {
+      placeName: "Kaiserman JCC",
+      placeNameLower: "kaiserman jcc",
+      address: "45 Haverford Rd, Penn Wynne, PA 19096",
+    },
+  ];
+
+  const rewritten = ctx.applyPlaceNameAddressToEvent_(evt, rules);
+
+  assert.notEqual(rewritten, evt);
+  assert.equal(rewritten.location, "45 Haverford Rd, Penn Wynne, PA 19096");
+  assert.equal(evt.location, "Kaiserman JCC- Field 2");
+});
+
+test("applyPlaceNameAddressToEvent_ leaves unmatched event locations alone", () => {
+  const ctx = loadIcalSyncContext();
+  const evt = {
+    uid: "uid-1",
+    summary: "Practice",
+    location: "Some Other Venue",
+  };
+  const rules = [
+    {
+      placeName: "Kaiserman JCC",
+      placeNameLower: "kaiserman jcc",
+      address: "45 Haverford Rd, Penn Wynne, PA 19096",
+    },
+  ];
+
+  const unchanged = ctx.applyPlaceNameAddressToEvent_(evt, rules);
+
+  assert.equal(unchanged, evt);
+  assert.equal(unchanged.location, "Some Other Venue");
+});
+
 test("resolveDrivePlan_ applies place-name mappings before route lookup", () => {
   const ctx = loadIcalSyncContext();
   const captured = [];

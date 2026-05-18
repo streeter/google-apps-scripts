@@ -261,7 +261,10 @@ function syncOneFeed_(cfg, mapping, today) {
   };
 
   parsed.events.forEach(function (evt) {
-    const effectiveEvt = applyEventTitlePrefix_(evt, mapping.titlePrefix);
+    const effectiveEvt = applyPlaceNameAddressToEvent_(
+      applyEventTitlePrefix_(evt, mapping.titlePrefix),
+      driveOpts.placeNameAddressRules,
+    );
     if (mapping.skipAllDayEvents && isAllDayEvent_(effectiveEvt)) {
       stats.skipped++;
       console.info(
@@ -1258,6 +1261,31 @@ function applyEventTitlePrefix_(evt, titlePrefix) {
   const baseTitle = (evt.summary || "(No title)").trim() || "(No title)";
   const copied = Object.assign({}, evt);
   copied.summary = prefix + " " + baseTitle;
+  return copied;
+}
+
+/**
+ * Rewrites an event location to its configured canonical address when matched.
+ */
+function applyPlaceNameAddressToEvent_(evt, rules) {
+  if (!evt || typeof evt !== "object") return evt;
+  const locationResolution = resolvePlaceNameAddress_(
+    evt.location || "",
+    rules,
+  );
+  if (!locationResolution.matched) return evt;
+
+  const copied = Object.assign({}, evt);
+  copied.location = locationResolution.text;
+  console.info(
+    '[INFO] Rewrote event location from "' +
+      locationResolution.sourceText +
+      '" to "' +
+      locationResolution.text +
+      '" using place name "' +
+      locationResolution.matchedPlaceName +
+      '"',
+  );
   return copied;
 }
 
