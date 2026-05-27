@@ -1976,6 +1976,132 @@ test("syncOneFeed_ preserves a target calendar decline and removes placeholders"
   );
 });
 
+test("syncOneFeed_ removes placeholders when all destination attendees declined", () => {
+  const ctx = loadIcalSyncContext();
+  const removed = [];
+  const feedUrl = "https://example.com/sports.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const sourceSyncKey = ctx.buildSyncKey_(feedHash, "uid-1", "");
+  const arrivalSyncKey = ctx.buildArrivalSyncKey_(sourceSyncKey);
+  const driveSyncKey = ctx.buildDriveSyncKey_(sourceSyncKey);
+  const icsText = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VEVENT",
+    "UID:uid-1",
+    "DTSTART:20990501T153000Z",
+    "DTEND:20990501T163000Z",
+    "SUMMARY:Soccer Game",
+    "DESCRIPTION:Arrival: 30 minutes in advance",
+    "LOCATION:Seattle, WA",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\n");
+  const parsedEvent = ctx.parseIcs_(icsText).events[0];
+
+  ctx.fetchIcs_ = () => icsText;
+  ctx.loadExistingEventsByKey_ = () => ({
+    [sourceSyncKey]: {
+      id: "source-1",
+      summary: "Soccer Game",
+      location: "Seattle, WA",
+      start: { dateTime: "2099-05-01T15:30:00Z" },
+      end: { dateTime: "2099-05-01T16:30:00Z" },
+      attendees: [
+        { email: "coach@example.com", responseStatus: "declined" },
+        { email: "parent@example.com", responseStatus: "declined" },
+      ],
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: sourceSyncKey,
+          syncHash: ctx.computeEventHash_(parsedEvent, [
+            "coach@example.com",
+            "parent@example.com",
+            "calendar-1",
+          ]),
+        },
+      },
+    },
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({
+    [arrivalSyncKey]: {
+      id: "arrival-1",
+      summary: "Advanced arrival for Soccer Game",
+      start: { dateTime: "2099-05-01T15:00:00Z" },
+      end: { dateTime: "2099-05-01T15:30:00Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "arrival",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: arrivalSyncKey,
+          sourceSyncKey: sourceSyncKey,
+        },
+      },
+    },
+  });
+  ctx.loadExistingDriveEventsByKey_ = () => ({
+    [driveSyncKey]: {
+      id: "drive-1",
+      summary: "Drive to Soccer Game",
+      start: { dateTime: "2099-05-01T14:35:00Z" },
+      end: { dateTime: "2099-05-01T15:00:00Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "drive",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: driveSyncKey,
+          sourceSyncKey: sourceSyncKey,
+        },
+      },
+    },
+  });
+  ctx.getDriveMinutes_ = () => {
+    throw new Error("unexpected drive lookup");
+  };
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    removed.push(eventId);
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: ["coach@example.com", "parent@example.com"],
+      addDriveTimePlaceholders: true,
+      defaultOriginAddress: "New York, NY",
+      minDriveMinutesToCreate: 10,
+      driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
+    },
+    {
+      name: "Sports Feed",
+      feedUrl: feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: true,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.unchanged, 1);
+  assert.equal(stats.arrivalDeleted, 1);
+  assert.equal(stats.driveDeleted, 1);
+  assert.deepEqual(removed.sort(), ["arrival-1", "drive-1"]);
+});
+
 test("syncOneFeed_ deletes managed future events missing from feed", () => {
   const ctx = loadIcalSyncContext();
   const removed = [];

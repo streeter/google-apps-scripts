@@ -468,11 +468,13 @@ function syncOneFeed_(cfg, mapping, today) {
       return;
     }
 
-    const existingDeclined = isTargetCalendarDeclinedEvent_(
+    const targetCalendarDeclined = isTargetCalendarDeclinedEvent_(
       existing,
       mapping.calendarId,
     );
-    const patchAttendees = existingDeclined
+    const destinationDeclined =
+      targetCalendarDeclined || isAllAttendeesDeclinedEvent_(existing);
+    const patchAttendees = targetCalendarDeclined
       ? buildDeclinedAttendees_(existing, mapping.calendarId)
       : sourceAttendees;
     const oldHash =
@@ -488,7 +490,7 @@ function syncOneFeed_(cfg, mapping, today) {
           existing.id +
           ")",
       );
-      if (existingDeclined) {
+      if (destinationDeclined) {
         console.info(
           '[DECLINE] Preserving local decline for "' +
             (effectiveEvt.summary || "(No title)") +
@@ -568,7 +570,7 @@ function syncOneFeed_(cfg, mapping, today) {
         existing.id +
         ", feed change detected)",
     );
-    if (existingDeclined) {
+    if (destinationDeclined) {
       console.info(
         '[DECLINE] Preserving local decline for "' +
           (effectiveEvt.summary || "(No title)") +
@@ -2952,6 +2954,24 @@ function toCalendarAttendeeResource_(attendee) {
  */
 function isTargetCalendarDeclinedEvent_(ev, calendarId) {
   return !!getTargetCalendarAttendee_(ev, calendarId, "declined");
+}
+
+/**
+ * Returns true when every attendee on a destination event has declined.
+ */
+function isAllAttendeesDeclinedEvent_(ev) {
+  const attendees = (ev && ev.attendees) || [];
+  if (!attendees.length) return false;
+  for (let i = 0; i < attendees.length; i++) {
+    const attendee = attendees[i];
+    if (
+      !attendee ||
+      String(attendee.responseStatus || "").toLowerCase() !== "declined"
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
