@@ -15,6 +15,7 @@ const CONFIG = {
   calendarIds: GetPersonalCalendars(), // (personal) calendars from which to block time
   daysToBlockInAdvance: 30, // how many days to look ahead for
   blockedEventTitle: "Busy", // the title to use in the created events in the (work) calendar
+  skipNotAttending: true, // Skip not attending events in the secondary calendar
   skipWeekends: true, // if weekend events should be skipped or not
   skipFreeAvailabilityEvents: true, // don't block events that set visibility as "Free" in the personal calendar
   workingHoursStartAt: 830, // any events ending before this time will be skipped. Use 0 if you don't care about working hours
@@ -131,11 +132,14 @@ const blockFromPersonalCalendars = () => {
   };
 
   const mightAttend = (event, calendarId) => {
+    const guestStatus = event
+      .getGuestsStatus()
+      .find((s) => s.getEmail() === calendarId);
+
+    console.log(`mightAttend: ${event.getTitle()} guest status ${guestStatus?.getStatus()}`);
+
     return (
-      event
-        .getGuestsStatus()
-        .find((s) => s.getEmail() === calendarId)
-        ?.getStatus() !== "no"
+      guestStatus?.getStatus() !== "no"
     );
   };
 
@@ -242,14 +246,37 @@ const blockFromPersonalCalendars = () => {
           "not going",
           // Return events that are confirmed as "Yes", "Maybe", or "Owner". null means created.
           (event) => {
-            return (
-              [
-                null,
-                CalendarApp.GuestStatus.MAYBE,
-                CalendarApp.GuestStatus.YES,
-                CalendarApp.GuestStatus.OWNER,
-              ].indexOf(event.getMyStatus()) >= 0
-            );
+            const status = event.getMyStatus();
+            if (
+              [CalendarApp.GuestStatus.MAYBE, CalendarApp.GuestStatus.YES].indexOf(
+                status,
+              ) >= 0
+            ) {
+              return true;
+            }
+
+            if ([null].indexOf(status) >= 0) {
+              console.log(`${event.getTitle()} has status null`);
+              return true;
+            }
+
+            if ([CalendarApp.GuestStatus.OWNER].indexOf(status) >= 0) {
+              const transparency = event.getTransparency();
+              const visibility = event.getVisibility();
+              if (transparency === "transparent") {
+                console.log(
+                  `${event.getTitle()} has status owner and is transparent`,
+                );
+                return false;
+              }
+
+              console.log(
+                `${event.getTitle()} has status owner and transparency ${transparency} and visibility ${visibility}`,
+              );
+              return true;
+            }
+
+            return false;
           },
         ),
       );
