@@ -136,11 +136,11 @@ const blockFromPersonalCalendars = () => {
       .getGuestsStatus()
       .find((s) => s.getEmail() === calendarId);
 
-    console.log(`mightAttend: ${event.getTitle()} guest status ${guestStatus?.getStatus()}`);
-
-    return (
-      guestStatus?.getStatus() !== "no"
+    console.log(
+      `mightAttend: ${event.getTitle()} guest status ${guestStatus?.getStatus()}`,
     );
+
+    return guestStatus?.getStatus() !== "no";
   };
 
   CONFIG.calendarIds.forEach((calendarId) => {
@@ -252,9 +252,10 @@ const blockFromPersonalCalendars = () => {
           (event) => {
             const status = event.getMyStatus();
             if (
-              [CalendarApp.GuestStatus.MAYBE, CalendarApp.GuestStatus.YES].indexOf(
-                status,
-              ) >= 0
+              [
+                CalendarApp.GuestStatus.MAYBE,
+                CalendarApp.GuestStatus.YES,
+              ].indexOf(status) >= 0
             ) {
               return true;
             }
