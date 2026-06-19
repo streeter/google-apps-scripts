@@ -18,9 +18,9 @@ const CONFIG = {
   skipNotAttending: true, // Skip not attending events in the secondary calendar
   skipWeekends: true, // if weekend events should be skipped or not
   skipFreeAvailabilityEvents: true, // don't block events that set visibility as "Free" in the personal calendar
+  skipOnWorkCalendarOOODays: true, // skip blocking when the work calendar has an all-day "Out of office" event
   workingHoursStartAt: 830, // any events ending before this time will be skipped. Use 0 if you don't care about working hours
   workingHoursEndAt: 1800, // any events starting after this time will be skipped. Use 2300
-  assumeAllDayEventsInWorkCalendarIsOOO: false, // if the work calendar has an all-day event, assume it's an Out Of Office day, and don't block times
   color: CalendarApp.EventColor.YELLOW, // set the color of any newly created events (see https://developers.google.com/apps-script/reference/calendar/event-color)
 };
 
@@ -167,7 +167,11 @@ const blockFromPersonalCalendars = () => {
     const knownOutOfOfficeDays = new Set(
       primaryCalendar
         .getEvents(now, endDate)
-        .filter((event) => event.isAllDayEvent())
+        .filter(
+          (event) =>
+            event.isAllDayEvent() &&
+            event.getTitle().toLowerCase() === "out of office",
+        )
         .map((event) => timeZoneAware.day(event)),
     );
 
@@ -209,7 +213,7 @@ const blockFromPersonalCalendars = () => {
         withLogging(
           "during an OOO day",
           (event) =>
-            !CONFIG.assumeAllDayEventsInWorkCalendarIsOOO ||
+            !CONFIG.skipOnWorkCalendarOOODays ||
             !knownOutOfOfficeDays.has(timeZoneAware.day(event)),
         ),
       )
@@ -328,6 +332,19 @@ const blockFromPersonalCalendars = () => {
         event.deleteEvent();
       });
 
+    if (CONFIG.skipOnWorkCalendarOOODays) {
+      eventsInSecondaryCalendar
+        .filter((event) => knownOutOfOfficeDays.has(timeZoneAware.day(event)))
+        .forEach((event) => {
+          const knownEvent = knownEvents[eventTagValue(event)];
+          if (knownEvent) {
+            console.log(
+              `🗑️ Need to delete event ${event.getTitle()} on ${event.getStartTime()}, as it falls on an OOO day`,
+            );
+            knownEvent.deleteEvent();
+          }
+        });
+    }
     if (CONFIG.skipNotAttending) {
       eventsInSecondaryCalendar
         .filter((event) => !mightAttend(event, calendarId))
