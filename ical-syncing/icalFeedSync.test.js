@@ -399,6 +399,219 @@ test("syncIcalFeeds groups identical per-feed failures in the summary error", ()
   );
 });
 
+test("syncIcalFeeds deletes future managed events from removed feed mappings", () => {
+  const ctx = loadIcalSyncContext();
+  const removed = [];
+  const syncedFeeds = [];
+  const activeFeedUrl = "https://example.com/active.ics";
+  const removedFeedUrl = "https://example.com/removed.ics";
+  const activeFeedHash = ctx.sha256Hex_(activeFeedUrl).slice(0, 16);
+  const removedFeedHash = ctx.sha256Hex_(removedFeedUrl).slice(0, 16);
+  const activeSourceSyncKey = ctx.buildSyncKey_(
+    activeFeedHash,
+    "active-uid",
+    "",
+  );
+  const removedSourceSyncKey = ctx.buildSyncKey_(
+    removedFeedHash,
+    "removed-uid",
+    "",
+  );
+  const removedArrivalSyncKey = ctx.buildArrivalSyncKey_(removedSourceSyncKey);
+  const removedDriveSyncKey = ctx.buildDriveSyncKey_(removedSourceSyncKey);
+
+  function managedEvent(id, sourceUrl, sourceFeed, syncKey, kind, start, end) {
+    const privateProps = {
+      managedKind: kind,
+      sourceFeed: sourceFeed,
+      sourceUrl: sourceUrl,
+      sourceUid: id + "-uid",
+      syncKey: syncKey,
+    };
+    if (kind === "arrival" || kind === "drive") {
+      privateProps.sourceSyncKey = removedSourceSyncKey;
+      privateProps.sourceEventId = "removed-source";
+    }
+    return {
+      id: id,
+      summary: id,
+      start: { dateTime: start },
+      end: { dateTime: end },
+      extendedProperties: { private: privateProps },
+    };
+  }
+
+  const calendarEvents = [
+    managedEvent(
+      "removed-source",
+      removedFeedUrl,
+      removedFeedHash,
+      removedSourceSyncKey,
+      "source",
+      "2099-05-01T15:30:00Z",
+      "2099-05-01T16:30:00Z",
+    ),
+    managedEvent(
+      "removed-arrival",
+      removedFeedUrl,
+      removedFeedHash,
+      removedArrivalSyncKey,
+      "arrival",
+      "2099-05-01T15:00:00Z",
+      "2099-05-01T15:30:00Z",
+    ),
+    managedEvent(
+      "removed-drive",
+      removedFeedUrl,
+      removedFeedHash,
+      removedDriveSyncKey,
+      "drive",
+      "2099-05-01T14:35:00Z",
+      "2099-05-01T15:00:00Z",
+    ),
+    managedEvent(
+      "removed-past-source",
+      removedFeedUrl,
+      removedFeedHash,
+      ctx.buildSyncKey_(removedFeedHash, "removed-past-uid", ""),
+      "source",
+      "2000-05-01T15:30:00Z",
+      "2000-05-01T16:30:00Z",
+    ),
+    managedEvent(
+      "active-source",
+      activeFeedUrl,
+      activeFeedHash,
+      activeSourceSyncKey,
+      "source",
+      "2099-05-01T17:00:00Z",
+      "2099-05-01T18:00:00Z",
+    ),
+    {
+      id: "manual-event",
+      summary: "Manual Event",
+      start: { dateTime: "2099-05-01T19:00:00Z" },
+      end: { dateTime: "2099-05-01T20:00:00Z" },
+    },
+  ];
+
+  ctx.getIcalSyncConfig = () => ({
+    deleteMissingFromFeed: true,
+    feedMappings: [
+      {
+        name: "Active Feed",
+        feedUrl: activeFeedUrl,
+        calendarId: "calendar-1",
+      },
+    ],
+  });
+  ctx.syncOneFeed_ = (_cfg, mapping) => {
+    syncedFeeds.push(mapping.feedUrl);
+    return { feed: mapping.name, ok: true };
+  };
+  ctx.Calendar.Events.list = (calendarId, opts) => {
+    assert.equal(calendarId, "calendar-1");
+    const filters = (opts && opts.privateExtendedProperty) || [];
+    return {
+      items: calendarEvents.filter((event) =>
+        filters.every((filter) => {
+          const [key, value] = String(filter).split("=");
+          const privateProps = (event.extendedProperties || {}).private || {};
+          return String(privateProps[key] || "") === value;
+        }),
+      ),
+    };
+  };
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    removed.push(eventId);
+  };
+
+  ctx.syncIcalFeeds();
+
+  assert.deepEqual(syncedFeeds, [activeFeedUrl]);
+  assert.deepEqual(removed.sort(), [
+    "removed-arrival",
+    "removed-drive",
+    "removed-source",
+  ]);
+});
+
+test("syncIcalFeeds deletes removed-feed events from remembered calendars", () => {
+  const ctx = loadIcalSyncContext();
+  const removed = [];
+  const activeFeedUrl = "https://example.com/active.ics";
+  const removedFeedUrl = "https://example.com/removed.ics";
+  const removedFeedHash = ctx.sha256Hex_(removedFeedUrl).slice(0, 16);
+  const removedSourceSyncKey = ctx.buildSyncKey_(
+    removedFeedHash,
+    "remembered-removed-uid",
+    "",
+  );
+  const rememberedEvent = {
+    id: "remembered-source",
+    summary: "Remembered Removed Event",
+    start: { dateTime: "2099-05-01T15:30:00Z" },
+    end: { dateTime: "2099-05-01T16:30:00Z" },
+    extendedProperties: {
+      private: {
+        managedKind: "source",
+        sourceFeed: removedFeedHash,
+        sourceUrl: removedFeedUrl,
+        sourceUid: "remembered-removed-uid",
+        syncKey: removedSourceSyncKey,
+      },
+    },
+  };
+
+  ctx.PropertiesService.getScriptProperties().setProperty(
+    "icalSync.managedCalendarIds",
+    JSON.stringify(["removed-calendar"]),
+  );
+  ctx.getIcalSyncConfig = () => ({
+    deleteMissingFromFeed: true,
+    feedMappings: [
+      {
+        name: "Active Feed",
+        feedUrl: activeFeedUrl,
+        calendarId: "active-calendar",
+      },
+    ],
+  });
+  ctx.syncOneFeed_ = (_cfg, mapping) => {
+    return { feed: mapping.name, ok: true };
+  };
+  ctx.Calendar.Events.list = (calendarId, opts) => {
+    const filters = (opts && opts.privateExtendedProperty) || [];
+    if (
+      calendarId !== "removed-calendar" ||
+      !filters.includes("managedKind=source")
+    ) {
+      return { items: [] };
+    }
+    return { items: [rememberedEvent] };
+  };
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    removed.push(calendarId + ":" + eventId);
+  };
+
+  ctx.syncIcalFeeds();
+
+  assert.deepEqual(removed, ["removed-calendar:remembered-source"]);
+});
+
 test("applyTriggerInterval_ rejects unsupported minute values", () => {
   const ctx = loadIcalSyncContext();
   const clock = {

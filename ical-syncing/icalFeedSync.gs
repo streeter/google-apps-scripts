@@ -14,6 +14,7 @@
 
 const GENERATED_BY_DESCRIPTION =
   "Generated with github.com/streeter/google-apps-scripts";
+const MANAGED_CALENDAR_IDS_PROPERTY = "icalSync.managedCalendarIds";
 const DRIVE_LOOKBACK_MINUTES = 60;
 const CALENDAR_WRITE_MAX_ATTEMPTS = 5;
 const CALENDAR_WRITE_BASE_SLEEP_MS = 500;
@@ -160,6 +161,19 @@ function syncIcalFeeds() {
       errors.push(feedName + ": " + errorText);
     }
   });
+
+  if (cfg.deleteMissingFromFeed) {
+    try {
+      cleanupRemovedFeedEvents_(cfg, today);
+    } catch (e) {
+      const errorText = String(e);
+      console.error(
+        "[ERROR] Failed cleaning up removed feed events: " + errorText,
+      );
+      errors.push("Removed feed cleanup: " + errorText);
+    }
+  }
+  rememberManagedCalendarIds_(cfg);
 
   console.log("[SYNC] Finished iCal feed sync");
   Logger.log(JSON.stringify(results, null, 2));
@@ -1420,6 +1434,213 @@ function buildActivePeerFeedHashes_(cfg, calendarId, currentFeedHash) {
     out[feedHash] = true;
   });
   return out;
+}
+
+/**
+ * Deletes future managed events whose source feed is no longer configured.
+ */
+function cleanupRemovedFeedEvents_(cfg, today) {
+  const activeFeedsByCalendar = buildActiveFeedIdentityByCalendar_(cfg);
+  const calendarIds = collectManagedCalendarIdsForCleanup_(cfg);
+  const stats = {
+    sourceDeleted: 0,
+    arrivalDeleted: 0,
+    driveDeleted: 0,
+    skippedPast: 0,
+  };
+
+  calendarIds.forEach(function (calendarId) {
+    ["source", "arrival", "drive"].forEach(function (managedKind) {
+      const activeFeeds = activeFeedsByCalendar[calendarId] || {
+        feedKeys: {},
+      };
+      loadManagedEventsByKind_(calendarId, managedKind).forEach(function (ev) {
+        if (!isRemovedFeedManagedEvent_(ev, managedKind, activeFeeds)) return;
+        if (!isFutureEventResource_(ev, today)) {
+          stats.skippedPast++;
+          return;
+        }
+
+        calendarEventRemove_(calendarId, ev.id);
+        if (managedKind === "source") stats.sourceDeleted++;
+        if (managedKind === "arrival") stats.arrivalDeleted++;
+        if (managedKind === "drive") stats.driveDeleted++;
+        console.log(
+          "[DELETE] Deleted removed-feed " +
+            managedKind +
+            " event " +
+            ev.id +
+            " from " +
+            calendarId,
+        );
+      });
+    });
+  });
+
+  const deleted =
+    stats.sourceDeleted + stats.arrivalDeleted + stats.driveDeleted;
+  if (deleted || stats.skippedPast) {
+    console.log(
+      "[SUMMARY] Removed feed cleanup: sourceDeleted=" +
+        stats.sourceDeleted +
+        ", arrivalDeleted=" +
+        stats.arrivalDeleted +
+        ", driveDeleted=" +
+        stats.driveDeleted +
+        ", skippedPast=" +
+        stats.skippedPast,
+    );
+  }
+  return stats;
+}
+
+/**
+ * Returns active feed hashes and URLs by target calendar.
+ */
+function buildActiveFeedIdentityByCalendar_(cfg) {
+  const out = {};
+  ((cfg && cfg.feedMappings) || []).forEach(function (mapping) {
+    if (!mapping || !mapping.feedUrl || !mapping.calendarId) return;
+    const calendarId = String(mapping.calendarId);
+    const feedHash = sha256Hex_(mapping.feedUrl).slice(0, 16);
+    if (!out[calendarId]) out[calendarId] = { feedKeys: {} };
+    out[calendarId].feedKeys[buildFeedIdentityKey_(feedHash, mapping.feedUrl)] =
+      true;
+  });
+  return out;
+}
+
+/**
+ * Builds a paired feed identity key from the metadata written to synced events.
+ */
+function buildFeedIdentityKey_(feedHash, feedUrl) {
+  return String(feedHash || "") + "\n" + String(feedUrl || "");
+}
+
+/**
+ * Returns current and previously configured target calendars for orphan cleanup.
+ */
+function collectManagedCalendarIdsForCleanup_(cfg) {
+  const ids = {};
+  ((cfg && cfg.feedMappings) || []).forEach(function (mapping) {
+    if (mapping && mapping.calendarId) ids[String(mapping.calendarId)] = true;
+  });
+  getRememberedManagedCalendarIds_().forEach(function (calendarId) {
+    ids[calendarId] = true;
+  });
+  return Object.keys(ids);
+}
+
+/**
+ * Records target calendars seen by this script so removed-calendar mappings can be cleaned later.
+ */
+function rememberManagedCalendarIds_(cfg) {
+  const ids = {};
+  getRememberedManagedCalendarIds_().forEach(function (calendarId) {
+    ids[calendarId] = true;
+  });
+  ((cfg && cfg.feedMappings) || []).forEach(function (mapping) {
+    if (mapping && mapping.calendarId) ids[String(mapping.calendarId)] = true;
+  });
+
+  try {
+    PropertiesService.getScriptProperties().setProperty(
+      MANAGED_CALENDAR_IDS_PROPERTY,
+      JSON.stringify(Object.keys(ids)),
+    );
+  } catch (e) {
+    console.warn(
+      "[WARN] Failed remembering managed calendar IDs for cleanup: " +
+        String(e),
+    );
+  }
+}
+
+/**
+ * Loads target calendars remembered from prior sync runs.
+ */
+function getRememberedManagedCalendarIds_() {
+  let raw = null;
+  try {
+    raw = PropertiesService.getScriptProperties().getProperty(
+      MANAGED_CALENDAR_IDS_PROPERTY,
+    );
+  } catch (e) {
+    console.warn(
+      "[WARN] Failed reading remembered managed calendar IDs: " + String(e),
+    );
+    return [];
+  }
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map(function (calendarId) {
+        return String(calendarId || "").trim();
+      })
+      .filter(function (calendarId) {
+        return !!calendarId;
+      });
+  } catch (e) {
+    console.warn(
+      "[WARN] Ignoring invalid remembered managed calendar IDs: " + String(e),
+    );
+    return [];
+  }
+}
+
+/**
+ * Loads managed events for one kind from a calendar.
+ */
+function loadManagedEventsByKind_(calendarId, managedKind) {
+  const out = [];
+  let pageToken;
+
+  do {
+    const resp = Calendar.Events.list(calendarId, {
+      privateExtendedProperty: ["managedKind=" + managedKind],
+      showDeleted: false,
+      singleEvents: false,
+      maxResults: 2500,
+      pageToken: pageToken,
+    });
+
+    (resp.items || []).forEach(function (ev) {
+      out.push(ev);
+    });
+
+    pageToken = resp.nextPageToken;
+  } while (pageToken);
+
+  return out;
+}
+
+/**
+ * Returns true for managed events tied to a feed no longer active on the target calendar.
+ */
+function isRemovedFeedManagedEvent_(ev, managedKind, activeFeeds) {
+  const p = ((ev || {}).extendedProperties || {}).private || {};
+  if (p.managedKind !== managedKind) return false;
+  if (!p.sourceFeed || !p.sourceUrl || !p.syncKey) return false;
+
+  if (managedKind === "source") {
+    if (isArrivalSyncKey_(p.syncKey) || isDriveSyncKey_(p.syncKey))
+      return false;
+  } else if (managedKind === "arrival") {
+    if (!isArrivalSyncKey_(p.syncKey) || !p.sourceSyncKey) return false;
+  } else if (managedKind === "drive") {
+    if (!isDriveSyncKey_(p.syncKey) || !p.sourceSyncKey) return false;
+  } else {
+    return false;
+  }
+
+  return !(
+    activeFeeds &&
+    activeFeeds.feedKeys &&
+    activeFeeds.feedKeys[buildFeedIdentityKey_(p.sourceFeed, p.sourceUrl)]
+  );
 }
 
 /**
