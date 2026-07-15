@@ -495,7 +495,20 @@ function syncOneFeed_(cfg, mapping, today) {
       ((existing.extendedProperties || {}).private || {}).syncHash || "";
     const patchHash = computeEventHash_(effectiveEvt, patchAttendees);
     const changedFromLastFeedState = oldHash !== patchHash;
-    if (!changedFromLastFeedState) {
+    const patchResource = buildEventPatchResource_(
+      effectiveEvt,
+      mapping.feedUrl,
+      feedHash,
+      syncKey,
+      patchAttendees,
+      parsed.calendarTimezone,
+    );
+    patchResource.extendedProperties.private.syncHash = patchHash;
+    const changedFromDestinationState = !eventResourceTimingMatches_(
+      existing,
+      patchResource,
+    );
+    if (!changedFromLastFeedState && !changedFromDestinationState) {
       stats.unchanged++;
       console.log(
         '[UNCHANGED] "' +
@@ -561,15 +574,6 @@ function syncOneFeed_(cfg, mapping, today) {
       );
       return;
     }
-    const patchResource = buildEventPatchResource_(
-      effectiveEvt,
-      mapping.feedUrl,
-      feedHash,
-      syncKey,
-      patchAttendees,
-      parsed.calendarTimezone,
-    );
-    patchResource.extendedProperties.private.syncHash = patchHash;
     const patched = calendarEventPatch_(
       patchResource,
       mapping.calendarId,
@@ -582,7 +586,11 @@ function syncOneFeed_(cfg, mapping, today) {
         (effectiveEvt.summary || "(No title)") +
         '" (' +
         existing.id +
-        ", feed change detected)",
+        ", " +
+        (changedFromLastFeedState
+          ? "feed change detected"
+          : "destination event time drift detected") +
+        ")",
     );
     if (destinationDeclined) {
       console.info(
@@ -1730,6 +1738,17 @@ function isDuplicateEventResource_(candidate, resource) {
 }
 
 /**
+ * Returns true when an existing event has the same start/end as the desired resource.
+ */
+function eventResourceTimingMatches_(candidate, resource) {
+  if (!candidate || !resource) return false;
+  return (
+    eventBoundaryKey_(candidate.start) === eventBoundaryKey_(resource.start) &&
+    eventBoundaryKey_(candidate.end) === eventBoundaryKey_(resource.end)
+  );
+}
+
+/**
  * Returns true when a duplicate belongs to another active feed syncing here.
  */
 function isActivePeerSourceEvent_(ev, activePeerFeedHashes) {
@@ -1773,16 +1792,36 @@ function eventBoundaryKey_(boundary) {
   if (!boundary) return "";
   if (boundary.date) return "date:" + String(boundary.date);
   if (boundary.dateTime) {
-    const parsed = new Date(boundary.dateTime);
+    const dateTime = String(boundary.dateTime);
+    if (!dateTimeHasExplicitZone_(dateTime)) {
+      return (
+        "dateTime:" +
+        normalizeFloatingDateTime_(dateTime) +
+        "|" +
+        String(boundary.timeZone || "")
+      );
+    }
+    const parsed = new Date(dateTime);
     if (!isNaN(parsed.getTime())) return "dateTime:" + parsed.toISOString();
-    return (
-      "dateTime:" +
-      String(boundary.dateTime) +
-      "|" +
-      String(boundary.timeZone || "")
-    );
+    return "dateTime:" + dateTime + "|" + String(boundary.timeZone || "");
   }
   return "";
+}
+
+/**
+ * Returns true when an RFC3339-ish dateTime string includes Z or a numeric offset.
+ */
+function dateTimeHasExplicitZone_(dateTime) {
+  return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(String(dateTime || ""));
+}
+
+/**
+ * Normalizes local-clock dateTime values while preserving their floating timezone.
+ */
+function normalizeFloatingDateTime_(dateTime) {
+  return String(dateTime || "")
+    .replace(/(\.\d*?)0+$/, "$1")
+    .replace(/\.$/, "");
 }
 
 /**

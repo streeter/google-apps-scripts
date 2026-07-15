@@ -1671,6 +1671,109 @@ test("syncOneFeed_ leaves unchanged events unpatched", () => {
   assert.equal(stats.unchanged, 1);
 });
 
+test("syncOneFeed_ patches unchanged feed events when destination time drifted", () => {
+  const ctx = loadIcalSyncContext();
+  const feedUrl = "https://example.com/feed.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const sourceSyncKey = ctx.buildSyncKey_(feedHash, "uid-1", "");
+  const icsText = [
+    "BEGIN:VCALENDAR",
+    "X-WR-TIMEZONE:America/Los_Angeles",
+    "BEGIN:VEVENT",
+    "UID:uid-1",
+    "DTSTART:20990501T140000",
+    "DTEND:20990501T150000",
+    "SUMMARY:Practice",
+    "LOCATION:Seattle, WA",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\n");
+  const parsedEvent = ctx.parseIcs_(icsText).events[0];
+  let patched = null;
+
+  ctx.fetchIcs_ = () => icsText;
+  ctx.loadExistingEventsByKey_ = () => ({
+    [sourceSyncKey]: {
+      id: "source-1",
+      summary: "Practice",
+      start: {
+        dateTime: "2099-05-01T14:00:00",
+        timeZone: "America/New_York",
+      },
+      end: {
+        dateTime: "2099-05-01T15:00:00",
+        timeZone: "America/New_York",
+      },
+      attendees: [{ email: "calendar-1" }],
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "uid-1",
+          syncKey: sourceSyncKey,
+          syncHash: ctx.computeEventHash_(parsedEvent, ["calendar-1"]),
+        },
+      },
+    },
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = (resource, calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    assert.equal(eventId, "source-1");
+    patched = resource;
+    return {
+      id: eventId,
+      start: resource.start,
+      end: resource.end,
+      attendees: resource.attendees,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+    },
+    {
+      name: "Stable Feed",
+      feedUrl: feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.unchanged, 0);
+  assert.ok(patched);
+  assert.equal(
+    JSON.stringify(patched.start),
+    JSON.stringify({
+      dateTime: "2099-05-01T14:00:00",
+      timeZone: "America/Los_Angeles",
+    }),
+  );
+  assert.equal(
+    JSON.stringify(patched.end),
+    JSON.stringify({
+      dateTime: "2099-05-01T15:00:00",
+      timeZone: "America/Los_Angeles",
+    }),
+  );
+});
+
 test("syncOneFeed_ skips duplicate event from another active feed", () => {
   const ctx = loadIcalSyncContext();
   const currentFeedUrl = "https://example.com/current.ics";
