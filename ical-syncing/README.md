@@ -12,6 +12,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 
 - Pulls each configured iCal feed URL.
 - Syncs only events that are on or after the current date into the configured local Google Calendar.
+- Gives timed events without `DTEND` a default duration of 30 minutes.
 - Forces synced local events to match upstream feed fields on each run (including start/end date and time).
 - Overwrites local edits to synced events on subsequent sync runs.
 - Optionally creates managed drive-time placeholder events from a configured origin address to event location.
@@ -31,6 +32,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 5. Edit `icalFeedSync.config.gs`:
    - Set `calendarId` for each feed mapping.
    - Optionally set per-feed `titlePrefix` (for example `[Sports]`).
+   - Set per-feed `timeZone` when a feed publishes floating times without an `X-WR-TIMEZONE` or `TZID`.
    - Optionally set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`; a provided per-feed list overrides defaults, including an empty list.
    - Optionally add `placeNameAddressMap` entries when event locations contain venue names instead of full addresses.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
@@ -94,6 +96,7 @@ function getIcalSyncConfig() {
         feedUrl: "https://example.com/calendar.ics",
         calendarId: "your_calendar_id@group.calendar.google.com",
         titlePrefix: "[Sports]",
+        timeZone: "America/New_York",
         attendeeEmails: [],
         skipAllDayEvents: false,
         addDriveTimePlaceholders: true,
@@ -107,7 +110,7 @@ function getIcalSyncConfig() {
 }
 ```
 
-`triggerHours` is an optional array of daily run hours in the Apps Script project timezone. This project is set to `America/New_York`, so `triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22]` runs at 6am, every 2 hours during the day, and 10pm Eastern.
+`triggerHours` is an optional array of daily run hours in the Apps Script project timezone. This project is set to `America/Los_Angeles`, so `triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22]` runs at 6am, every 2 hours during the day, and 10pm Pacific.
 
 `triggerEveryMinutes` remains available as a fallback when `triggerHours` is empty. It supports `1`, `5`, `10`, `15`, `30`, and multiples of `60` (for example `60` hourly, `120` every 2 hours, `1440` daily).
 
@@ -116,6 +119,7 @@ function getIcalSyncConfig() {
 - `feedMappings` can include many feed -> calendar routes.
 - `triggerHours` takes precedence over `triggerEveryMinutes` when non-empty.
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
+- Per-feed `timeZone` is the fallback for floating `DTSTART`/`DTEND` values when the feed does not declare a timezone. If omitted, the Apps Script project timezone is used.
 - Per-feed `skipAllDayEvents` filters out all-day source events for that feed when set to `true`. Default: `false`.
 - `placeNameAddressMap` lets you translate venue names in locations into routable addresses before drive lookup.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when provided, including an empty list.

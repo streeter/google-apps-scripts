@@ -18,6 +18,8 @@ const MANAGED_CALENDAR_IDS_PROPERTY = "icalSync.managedCalendarIds";
 const DRIVE_LOOKBACK_MINUTES = 60;
 const CALENDAR_WRITE_MAX_ATTEMPTS = 5;
 const CALENDAR_WRITE_BASE_SLEEP_MS = 500;
+const SYNC_LOCK_WAIT_MS = 1000;
+const DEFAULT_TIMED_EVENT_DURATION_MINUTES = 30;
 
 /**
  * Creates (or recreates) the periodic time-based trigger for the main sync function.
@@ -133,6 +135,23 @@ function normalizeTriggerHours_(triggerHours) {
  * Main entry point: logs setup info, loads config, and syncs each feed mapping.
  */
 function syncIcalFeeds() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(SYNC_LOCK_WAIT_MS)) {
+    console.warn("[SKIP] iCal feed sync is already in progress");
+    return [];
+  }
+
+  try {
+    return syncIcalFeedsUnlocked_();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Performs one complete sync while the caller holds the script lock.
+ */
+function syncIcalFeedsUnlocked_() {
   logCalendarIdsOnFirstRun_();
   const cfg = getIcalSyncConfig_();
   const today = startOfToday_();
@@ -186,6 +205,7 @@ function syncIcalFeeds() {
         groupedErrors.join(" | "),
     );
   }
+  return results;
 }
 
 function groupSyncErrors_(errors) {
@@ -254,7 +274,7 @@ function syncOneFeed_(cfg, mapping, today) {
   console.log('[FEED] Processing "' + feedName + '" -> ' + mapping.calendarId);
 
   const icsText = fetchIcs_(mapping.feedUrl);
-  const parsed = parseIcs_(icsText);
+  const parsed = parseIcs_(icsText, mapping.timeZone);
   const existingByKey = loadExistingEventsByKey_(mapping.calendarId, feedHash);
   const existingArrivalByKey = loadExistingArrivalEventsByKey_(
     mapping.calendarId,
@@ -807,6 +827,7 @@ function getIcalSyncConfig_() {
       m.attendeeEmails = [];
     }
     if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
+    if (typeof m.timeZone !== "string") m.timeZone = "";
     if (typeof m.skipAllDayEvents !== "boolean") m.skipAllDayEvents = false;
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
@@ -915,12 +936,13 @@ function computeCalendarWriteBackoffMs_(attempt) {
 /**
  * Parses an ICS document into normalized event objects plus calendar-level timezone.
  */
-function parseIcs_(text) {
+function parseIcs_(text, fallbackTimeZone) {
   const lines = unfoldIcsLines_(text);
   const events = [];
   let inEvent = false;
   let block = [];
-  let calendarTimezone = Session.getScriptTimeZone();
+  let calendarTimezone =
+    String(fallbackTimeZone || "").trim() || Session.getScriptTimeZone();
 
   lines.forEach(function (line) {
     const upper = line.toUpperCase();
@@ -1108,7 +1130,7 @@ function defaultEndFromStart_(start) {
 
   if (start.dateTime.slice(-1) === "Z") {
     const d = new Date(start.dateTime);
-    d.setHours(d.getHours() + 1);
+    d.setMinutes(d.getMinutes() + DEFAULT_TIMED_EVENT_DURATION_MINUTES);
     return {
       type: "dateTime",
       dateTime: d.toISOString().replace(".000Z", "Z"),
@@ -1127,7 +1149,7 @@ function defaultEndFromStart_(start) {
     Number(m[5]),
     Number(m[6]),
   );
-  d.setHours(d.getHours() + 1);
+  d.setMinutes(d.getMinutes() + DEFAULT_TIMED_EVENT_DURATION_MINUTES);
 
   return {
     type: "dateTime",
@@ -1732,8 +1754,8 @@ function isDuplicateEventResource_(candidate, resource) {
       normalizeDuplicateText_(resource.summary) &&
     normalizeDuplicateText_(candidate.description) ===
       normalizeDuplicateText_(resource.description) &&
-    eventBoundaryKey_(candidate.start) === eventBoundaryKey_(resource.start) &&
-    eventBoundaryKey_(candidate.end) === eventBoundaryKey_(resource.end)
+    eventBoundariesMatch_(candidate.start, resource.start) &&
+    eventBoundariesMatch_(candidate.end, resource.end)
   );
 }
 
@@ -1743,8 +1765,51 @@ function isDuplicateEventResource_(candidate, resource) {
 function eventResourceTimingMatches_(candidate, resource) {
   if (!candidate || !resource) return false;
   return (
-    eventBoundaryKey_(candidate.start) === eventBoundaryKey_(resource.start) &&
-    eventBoundaryKey_(candidate.end) === eventBoundaryKey_(resource.end)
+    eventBoundariesMatch_(candidate.start, resource.start) &&
+    eventBoundariesMatch_(candidate.end, resource.end)
+  );
+}
+
+/**
+ * Compares Calendar boundaries even when one side is a floating local time and
+ * the Calendar API has canonicalized the other side to an explicit UTC offset.
+ */
+function eventBoundariesMatch_(left, right) {
+  if (!left || !right) return false;
+  if (left.date || right.date) {
+    return (
+      !!left.date && !!right.date && String(left.date) === String(right.date)
+    );
+  }
+  if (!left.dateTime || !right.dateTime) return false;
+
+  if (eventBoundaryKey_(left) === eventBoundaryKey_(right)) return true;
+
+  const leftHasZone = dateTimeHasExplicitZone_(left.dateTime);
+  const rightHasZone = dateTimeHasExplicitZone_(right.dateTime);
+  if (leftHasZone === rightHasZone) return false;
+
+  const explicitBoundary = leftHasZone ? left : right;
+  const floatingBoundary = leftHasZone ? right : left;
+  const explicitDate = new Date(explicitBoundary.dateTime);
+  if (isNaN(explicitDate.getTime())) return false;
+
+  const timeZone =
+    String(floatingBoundary.timeZone || "").trim() ||
+    Session.getScriptTimeZone();
+  let explicitLocal;
+  try {
+    explicitLocal = Utilities.formatDate(
+      explicitDate,
+      timeZone,
+      "yyyy-MM-dd'T'HH:mm:ss",
+    );
+  } catch (e) {
+    return false;
+  }
+  return (
+    normalizeFloatingDateTime_(explicitLocal) ===
+    normalizeFloatingDateTime_(floatingBoundary.dateTime)
   );
 }
 
@@ -1830,7 +1895,12 @@ function normalizeFloatingDateTime_(dateTime) {
 function eventBoundaryToDate_(boundary) {
   if (!boundary) return null;
   if (boundary.dateTime) {
-    const dateTime = new Date(boundary.dateTime);
+    const dateTime = dateTimeHasExplicitZone_(boundary.dateTime)
+      ? new Date(boundary.dateTime)
+      : floatingDateTimeToDate_(
+          boundary.dateTime,
+          boundary.timeZone || Session.getScriptTimeZone(),
+        );
     if (!isNaN(dateTime.getTime())) return dateTime;
   }
   if (boundary.date) {
@@ -1841,10 +1911,57 @@ function eventBoundaryToDate_(boundary) {
 }
 
 /**
+ * Resolves a floating local-clock dateTime to an instant in an IANA timezone.
+ */
+function floatingDateTimeToDate_(dateTime, timeZone) {
+  const match = String(dateTime || "").match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/,
+  );
+  if (!match) return new Date(NaN);
+
+  const milliseconds = Number((match[7] || "").slice(0, 3).padEnd(3, "0"));
+  const localAsUtc = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+    milliseconds,
+  );
+
+  let candidate = new Date(localAsUtc);
+  for (let i = 0; i < 2; i++) {
+    let offset;
+    try {
+      offset = parseTimeZoneOffsetMinutes_(
+        Utilities.formatDate(candidate, timeZone, "Z"),
+      );
+    } catch (e) {
+      return new Date(NaN);
+    }
+    if (offset === null) return new Date(NaN);
+    candidate = new Date(localAsUtc - offset * 60 * 1000);
+  }
+  return candidate;
+}
+
+/**
+ * Parses RFC822-style timezone offsets such as -0700 or +05:30.
+ */
+function parseTimeZoneOffsetMinutes_(offsetText) {
+  const match = String(offsetText || "").match(/^([+-])(\d{2}):?(\d{2})$/);
+  if (!match) return null;
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === "-" ? -minutes : minutes;
+}
+
+/**
  * Loads existing calendar events previously managed by this feed, keyed by syncKey.
  */
 function loadExistingEventsByKey_(calendarId, feedHash) {
   const out = {};
+  const duplicates = [];
   let pageToken;
 
   do {
@@ -1858,12 +1975,35 @@ function loadExistingEventsByKey_(calendarId, feedHash) {
 
     (resp.items || []).forEach(function (ev) {
       const key = ((ev.extendedProperties || {}).private || {}).syncKey || "";
-      if (key && !isDriveSyncKey_(key) && !isArrivalSyncKey_(key))
+      if (!key || isDriveSyncKey_(key) || isArrivalSyncKey_(key)) return;
+      if (!out[key]) {
         out[key] = ev;
+        return;
+      }
+
+      const existingCreated = Date.parse(out[key].created || "") || Infinity;
+      const candidateCreated = Date.parse(ev.created || "") || Infinity;
+      if (candidateCreated < existingCreated) {
+        duplicates.push(out[key]);
+        out[key] = ev;
+      } else {
+        duplicates.push(ev);
+      }
     });
 
     pageToken = resp.nextPageToken;
   } while (pageToken);
+
+  duplicates.forEach(function (duplicate) {
+    calendarEventRemove_(calendarId, duplicate.id);
+    console.log(
+      '[DELETE] Deleted duplicate managed event "' +
+        (duplicate.summary || "(No title)") +
+        '" (' +
+        duplicate.id +
+        ")",
+    );
+  });
 
   return out;
 }

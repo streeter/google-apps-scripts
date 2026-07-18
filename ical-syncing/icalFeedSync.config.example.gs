@@ -6,8 +6,8 @@
 function getIcalSyncConfig() {
   return {
     // Optional explicit daily trigger hours in the script timezone.
-    // This project is configured for America/New_York in appsscript.json.
-    // Example below runs at 6am, every 2 hours during the day, and 10pm Eastern.
+    // This project is configured for America/Los_Angeles in appsscript.json.
+    // Example below runs at 6am, every 2 hours during the day, and 10pm Pacific.
     triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22],
 
     // Fallback frequency for setupIcalFeedSyncTrigger() when triggerHours is empty.
@@ -45,6 +45,10 @@ function getIcalSyncConfig() {
         // Optional per-feed title prefix for all synced event titles.
         // Example: "[Cole]" -> "[Cole] Practice"
         titlePrefix: "",
+
+        // Optional fallback for floating feed times when the ICS contains no
+        // X-WR-TIMEZONE and DTSTART/DTEND contain no TZID.
+        timeZone: "America/Los_Angeles",
 
         // Optional per-feed extra attendee override.
         // If omitted, defaultAttendeeEmails is used.

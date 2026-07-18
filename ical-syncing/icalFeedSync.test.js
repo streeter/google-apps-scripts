@@ -7,6 +7,11 @@ const crypto = require("node:crypto");
 
 function loadIcalSyncContext() {
   const scriptProperties = new Map();
+  const lockState = {
+    available: true,
+    held: false,
+    released: false,
+  };
   const triggerState = {
     method: null,
     value: null,
@@ -25,7 +30,7 @@ function loadIcalSyncContext() {
     Math,
     Logger: { log: () => {} },
     Session: {
-      getScriptTimeZone: () => "America/New_York",
+      getScriptTimeZone: () => "America/Los_Angeles",
       getEffectiveUser: () => ({ getEmail: () => "owner@example.com" }),
       getActiveUser: () => ({ getEmail: () => "owner@example.com" }),
     },
@@ -34,6 +39,19 @@ function loadIcalSyncContext() {
         getProperty: (key) =>
           scriptProperties.has(key) ? scriptProperties.get(key) : null,
         setProperty: (key, value) => scriptProperties.set(key, String(value)),
+      }),
+    },
+    LockService: {
+      getScriptLock: () => ({
+        tryLock: () => {
+          if (!lockState.available || lockState.held) return false;
+          lockState.held = true;
+          return true;
+        },
+        releaseLock: () => {
+          lockState.held = false;
+          lockState.released = true;
+        },
       }),
     },
     Utilities: {
@@ -45,6 +63,50 @@ function loadIcalSyncContext() {
           .update(String(input), "utf8")
           .digest();
         return Array.from(hash.values());
+      },
+      formatDate: (date, timeZone, pattern) => {
+        if (pattern === "Z") {
+          const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone,
+            timeZoneName: "longOffset",
+          }).formatToParts(date);
+          const offset =
+            parts.find((part) => part.type === "timeZoneName")?.value ||
+            "GMT+00:00";
+          const match = offset.match(/^GMT([+-])(\d{2}):(\d{2})$/);
+          if (!match) return "+0000";
+          return match[1] + match[2] + match[3];
+        }
+        if (pattern === "yyyy-MM-dd'T'HH:mm:ss") {
+          const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hourCycle: "h23",
+          }).formatToParts(date);
+          const values = {};
+          parts.forEach((part) => {
+            if (part.type !== "literal") values[part.type] = part.value;
+          });
+          return (
+            values.year +
+            "-" +
+            values.month +
+            "-" +
+            values.day +
+            "T" +
+            values.hour +
+            ":" +
+            values.minute +
+            ":" +
+            values.second
+          );
+        }
+        throw new Error("Unexpected Utilities.formatDate pattern: " + pattern);
       },
       sleep: () => {},
     },
@@ -118,6 +180,7 @@ function loadIcalSyncContext() {
       },
     },
     __triggerState: triggerState,
+    __lockState: lockState,
   };
 
   context.ScriptApp.newTrigger = () => ({
@@ -219,6 +282,19 @@ test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
   const cfg = ctx.getIcalSyncConfig_();
 
   assert.equal(cfg.feedMappings[0].skipAllDayEvents, false);
+});
+
+test("getIcalSyncConfig_ defaults per-feed timeZone to empty", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+
+  assert.equal(cfg.feedMappings[0].timeZone, "");
 });
 
 test("getIcalSyncConfig_ defaults triggerHours to empty array", () => {
@@ -360,6 +436,53 @@ test("syncIcalFeeds processes all feeds and throws a summary error at the end", 
   assert.match(logs[0], /"Feed A"/);
   assert.match(logs[0], /"Feed B"/);
   assert.match(logs[0], /"Feed C"/);
+});
+
+test("syncIcalFeeds skips an overlapping execution", () => {
+  const ctx = loadIcalSyncContext();
+  let configCalls = 0;
+  const warnings = [];
+  ctx.__lockState.available = false;
+  ctx.console.warn = (message) => warnings.push(String(message));
+  ctx.getIcalSyncConfig = () => {
+    configCalls++;
+    return {
+      feedMappings: [
+        {
+          name: "Feed A",
+          feedUrl: "https://example.com/a.ics",
+          calendarId: "cal-a",
+        },
+      ],
+    };
+  };
+
+  const result = ctx.syncIcalFeeds();
+
+  assert.equal(result.length, 0);
+  assert.equal(configCalls, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /already in progress/);
+});
+
+test("syncIcalFeeds releases its script lock after a failure", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal-a",
+      },
+    ],
+  });
+  ctx.syncOneFeed_ = () => {
+    throw new Error("sync failed");
+  };
+
+  assert.throws(() => ctx.syncIcalFeeds(), /sync failed/);
+  assert.equal(ctx.__lockState.held, false);
+  assert.equal(ctx.__lockState.released, true);
 });
 
 test("syncIcalFeeds groups identical per-feed failures in the summary error", () => {
@@ -1596,6 +1719,70 @@ test("syncOneFeed_ logs the event title when create insert fails", () => {
   );
 });
 
+test("loadExistingEventsByKey_ removes duplicate managed sync keys", () => {
+  const ctx = loadIcalSyncContext();
+  const removed = [];
+  const feedHash = "feedhash123";
+  const syncKey = "feedhash123:same-source";
+  ctx.Calendar.Events.list = () => ({
+    items: [
+      {
+        id: "source-original",
+        created: "2026-07-15T20:00:00Z",
+        extendedProperties: {
+          private: {
+            managedKind: "source",
+            sourceFeed: feedHash,
+            syncKey,
+          },
+        },
+      },
+      {
+        id: "source-duplicate-1",
+        created: "2026-07-15T20:01:00Z",
+        extendedProperties: {
+          private: {
+            managedKind: "source",
+            sourceFeed: feedHash,
+            syncKey,
+          },
+        },
+      },
+      {
+        id: "source-duplicate-2",
+        created: "2026-07-15T20:02:00Z",
+        extendedProperties: {
+          private: {
+            managedKind: "source",
+            sourceFeed: feedHash,
+            syncKey,
+          },
+        },
+      },
+    ],
+  });
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    removed.push(eventId);
+  };
+
+  const existing = ctx.loadExistingEventsByKey_("calendar-1", feedHash);
+
+  assert.equal(existing[syncKey].id, "source-original");
+  assert.deepEqual(removed, ["source-duplicate-1", "source-duplicate-2"]);
+});
+
+test("eventBoundaryToDate_ honors the timezone on a floating boundary", () => {
+  const ctx = loadIcalSyncContext();
+
+  const date = ctx.eventBoundaryToDate_({
+    dateTime: "2026-08-18T14:00:00",
+    timeZone: "America/Los_Angeles",
+  });
+
+  assert.equal(date.toISOString(), "2026-08-18T21:00:00.000Z");
+});
+
 test("syncOneFeed_ leaves unchanged events unpatched", () => {
   const ctx = loadIcalSyncContext();
   const feedUrl = "https://example.com/feed.ics";
@@ -1660,6 +1847,158 @@ test("syncOneFeed_ leaves unchanged events unpatched", () => {
       feedUrl: feedUrl,
       calendarId: "calendar-1",
       titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(patchCalls, 0);
+  assert.equal(stats.updated, 0);
+  assert.equal(stats.unchanged, 1);
+});
+
+test("syncOneFeed_ uses a feed timezone and 30-minute fallback end for floating times", () => {
+  const ctx = loadIcalSyncContext();
+  const inserts = [];
+  const icsText = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "BEGIN:VEVENT",
+    "UID:17358853@wildwood.piedmont.k12.ca.us",
+    "DTSTART:20260818T140000",
+    "SUMMARY:2 PM Release Grades 1-3",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\n");
+
+  ctx.fetchIcs_ = () => icsText;
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.list = () => ({ items: [] });
+  ctx.Calendar.Events.insert = (resource) => {
+    inserts.push(resource);
+    return {
+      id: "wildwood-created-1",
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+    },
+    {
+      name: "Wildwood",
+      feedUrl: "https://wildwood.piedmont.k12.ca.us/calendar/calendar_356.ics",
+      calendarId: "calendar-1",
+      titlePrefix: "Wildwood:",
+      timeZone: "America/Los_Angeles",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 1);
+  assert.equal(inserts.length, 1);
+  assert.equal(
+    JSON.stringify(inserts[0].start),
+    JSON.stringify({
+      dateTime: "2026-08-18T14:00:00",
+      timeZone: "America/Los_Angeles",
+    }),
+  );
+  assert.equal(
+    JSON.stringify(inserts[0].end),
+    JSON.stringify({
+      dateTime: "2026-08-18T14:30:00",
+      timeZone: "America/Los_Angeles",
+    }),
+  );
+});
+
+test("syncOneFeed_ treats Calendar offset timestamps as the same feed time", () => {
+  const ctx = loadIcalSyncContext();
+  const feedUrl =
+    "https://wildwood.piedmont.k12.ca.us/calendar/calendar_356.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const sourceSyncKey = ctx.buildSyncKey_(
+    feedHash,
+    "17358853@wildwood.piedmont.k12.ca.us",
+    "",
+  );
+  const icsText = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VEVENT",
+    "UID:17358853@wildwood.piedmont.k12.ca.us",
+    "DTSTART:20260818T140000",
+    "SUMMARY:2 PM Release Grades 1-3",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\n");
+  const parsedEvent = ctx.parseIcs_(icsText, "America/Los_Angeles").events[0];
+  let patchCalls = 0;
+
+  ctx.fetchIcs_ = () => icsText;
+  ctx.loadExistingEventsByKey_ = () => ({
+    [sourceSyncKey]: {
+      id: "source-1",
+      summary: "Wildwood: 2 PM Release Grades 1-3",
+      start: { dateTime: "2026-08-18T14:00:00-07:00" },
+      end: { dateTime: "2026-08-18T14:30:00-07:00" },
+      attendees: [{ email: "calendar-1" }],
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "17358853@wildwood.piedmont.k12.ca.us",
+          syncKey: sourceSyncKey,
+          syncHash: ctx.computeEventHash_(
+            ctx.applyEventTitlePrefix_(parsedEvent, "Wildwood:"),
+            ["calendar-1"],
+          ),
+        },
+      },
+    },
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = () => {
+    patchCalls++;
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+    },
+    {
+      name: "Wildwood",
+      feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "Wildwood:",
+      timeZone: "America/Los_Angeles",
       addDriveTimePlaceholders: false,
       originAddress: "",
     },
