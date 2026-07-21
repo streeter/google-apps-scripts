@@ -3210,6 +3210,7 @@ test("syncOneFeed_ removes placeholders when all destination attendees declined"
 test("syncOneFeed_ deletes managed future events missing from feed", () => {
   const ctx = loadIcalSyncContext();
   const removed = [];
+  const logs = [];
   const feedUrl = "https://example.com/sports.ics";
   const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
   const sourceSyncKey = ctx.buildSyncKey_(feedHash, "uid-1", "");
@@ -3280,6 +3281,7 @@ test("syncOneFeed_ deletes managed future events missing from feed", () => {
     assert.equal(calendarId, "calendar-1");
     removed.push(eventId);
   };
+  ctx.console.log = (message) => logs.push(String(message));
 
   const stats = ctx.syncOneFeed_(
     {
@@ -3304,4 +3306,19 @@ test("syncOneFeed_ deletes managed future events missing from feed", () => {
   assert.equal(stats.arrivalDeleted, 1);
   assert.equal(stats.driveDeleted, 1);
   assert.deepEqual(removed.sort(), ["arrival-1", "drive-1", "source-1"]);
+  assert.ok(
+    logs.includes(
+      '[DELETE] Deleted feed-missing event "Missing Soccer Game" on 2099-05-01 (source-1) from Sports Feed',
+    ),
+  );
+});
+
+test("eventStartDateForLog_ supports all-day and missing starts", () => {
+  const ctx = loadIcalSyncContext();
+
+  assert.equal(
+    ctx.eventStartDateForLog_({ start: { date: "2099-05-02" } }),
+    "2099-05-02",
+  );
+  assert.equal(ctx.eventStartDateForLog_({}), "(Unknown date)");
 });

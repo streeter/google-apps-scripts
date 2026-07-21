@@ -710,7 +710,14 @@ function syncOneFeed_(cfg, mapping, today) {
         calendarEventRemove_(mapping.calendarId, ev.id);
         stats.deleted++;
         console.log(
-          "[DELETE] Deleted feed-missing event " + ev.id + " from " + feedName,
+          '[DELETE] Deleted feed-missing event "' +
+            (ev.summary || "(No title)") +
+            '" on ' +
+            eventStartDateForLog_(ev) +
+            " (" +
+            ev.id +
+            ") from " +
+            feedName,
         );
       }
     });
@@ -792,6 +799,15 @@ function syncOneFeed_(cfg, mapping, today) {
       stats.arrivalSkipped,
   );
   return stats;
+}
+
+/**
+ * Returns the calendar-local start date for concise event logging.
+ */
+function eventStartDateForLog_(eventResource) {
+  const start = eventResource && eventResource.start;
+  const value = start && (start.date || start.dateTime);
+  return value ? String(value).slice(0, 10) : "(Unknown date)";
 }
 
 /**
