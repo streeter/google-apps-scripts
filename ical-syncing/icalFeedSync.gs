@@ -20,6 +20,10 @@ const CALENDAR_WRITE_MAX_ATTEMPTS = 5;
 const CALENDAR_WRITE_BASE_SLEEP_MS = 500;
 const SYNC_LOCK_WAIT_MS = 1000;
 const DEFAULT_TIMED_EVENT_DURATION_MINUTES = 30;
+const CALENDAR_WRITE_DIAGNOSTICS = {
+  started: 0,
+  succeeded: 0,
+};
 
 /**
  * Creates (or recreates) the periodic time-based trigger for the main sync function.
@@ -864,28 +868,53 @@ function fetchIcs_(url) {
 /**
  * Retries Calendar write operations that hit transient usage or rate limits.
  */
-function withCalendarWriteRetry_(opName, fn) {
+function withCalendarWriteRetry_(opName, context, fn) {
   let lastError = null;
+  CALENDAR_WRITE_DIAGNOSTICS.started++;
+  context.writeNumber = CALENDAR_WRITE_DIAGNOSTICS.started;
 
   for (let attempt = 1; attempt <= CALENDAR_WRITE_MAX_ATTEMPTS; attempt++) {
     try {
-      return fn();
+      const result = fn();
+      CALENDAR_WRITE_DIAGNOSTICS.succeeded++;
+      return result;
     } catch (e) {
       lastError = e;
-      if (
-        attempt >= CALENDAR_WRITE_MAX_ATTEMPTS ||
-        !isRetryableCalendarWriteError_(e)
-      ) {
+      const errorType = classifyCalendarWriteError_(e);
+      const retryable = isRetryableCalendarWriteError_(e);
+      if (attempt >= CALENDAR_WRITE_MAX_ATTEMPTS || !retryable) {
+        console.error(
+          "[CALENDAR_WRITE_FAILED] op=" +
+            opName +
+            " errorType=" +
+            errorType +
+            " attempt=" +
+            attempt +
+            "/" +
+            CALENDAR_WRITE_MAX_ATTEMPTS +
+            " retryable=" +
+            retryable +
+            formatCalendarWriteContext_(context) +
+            " error=" +
+            formatCalendarWriteLogValue_(String(e)),
+        );
         throw e;
       }
       const sleepMs = computeCalendarWriteBackoffMs_(attempt);
       console.warn(
-        "[WARN] Retrying Calendar write " +
+        "[CALENDAR_WRITE_RETRY] op=" +
           opName +
-          " after attempt " +
+          " errorType=" +
+          errorType +
+          " attempt=" +
           attempt +
-          " due to: " +
-          String(e),
+          "/" +
+          CALENDAR_WRITE_MAX_ATTEMPTS +
+          " nextDelayMs=" +
+          sleepMs +
+          formatCalendarWriteContext_(context) +
+          " error=" +
+          formatCalendarWriteLogValue_(String(e)),
       );
       Utilities.sleep(sleepMs);
     }
@@ -895,28 +924,142 @@ function withCalendarWriteRetry_(opName, fn) {
 }
 
 function calendarEventInsert_(resource, calendarId, options) {
-  return withCalendarWriteRetry_("insert", function () {
-    return Calendar.Events.insert(resource, calendarId, options);
+  const insertResource = ensureDeterministicCalendarEventId_(resource);
+  const context = buildCalendarWriteContext_(
+    insertResource,
+    calendarId,
+    insertResource.id,
+  );
+  return withCalendarWriteRetry_("insert", context, function () {
+    return Calendar.Events.insert(insertResource, calendarId, options);
   });
 }
 
 function calendarEventPatch_(resource, calendarId, eventId, options) {
-  return withCalendarWriteRetry_("patch", function () {
+  const context = buildCalendarWriteContext_(resource, calendarId, eventId);
+  return withCalendarWriteRetry_("patch", context, function () {
     return Calendar.Events.patch(resource, calendarId, eventId, options);
   });
 }
 
 function calendarEventRemove_(calendarId, eventId) {
-  return withCalendarWriteRetry_("remove", function () {
+  const context = buildCalendarWriteContext_(null, calendarId, eventId);
+  return withCalendarWriteRetry_("remove", context, function () {
     return Calendar.Events.remove(calendarId, eventId);
   });
 }
 
-function isRetryableCalendarWriteError_(err) {
-  const text = String(
+/**
+ * Assigns the stable Google Calendar event ID required for every managed insert.
+ */
+function ensureDeterministicCalendarEventId_(resource) {
+  if (!resource || typeof resource !== "object") {
+    throw new Error("Calendar event insert requires an event resource.");
+  }
+
+  const privateProps = (resource.extendedProperties || {}).private || {};
+  const syncKey = String(privateProps.syncKey || "").trim();
+  if (!syncKey) {
+    throw new Error(
+      "Calendar event insert requires extendedProperties.private.syncKey " +
+        "to generate a deterministic event ID.",
+    );
+  }
+
+  resource.id = buildDeterministicCalendarEventId_(syncKey);
+  return resource;
+}
+
+/**
+ * Produces an API-safe, stable event ID from this script's logical sync key.
+ * Hex is a subset of Calendar's base32hex ID alphabet.
+ */
+function buildDeterministicCalendarEventId_(syncKey) {
+  const normalized = String(syncKey || "").trim();
+  if (!normalized) {
+    throw new Error(
+      "Cannot build a deterministic event ID without a sync key.",
+    );
+  }
+  return sha256Hex_("ical-sync-event:" + normalized);
+}
+
+/**
+ * Captures bounded, non-payload context needed to diagnose Calendar writes.
+ */
+function buildCalendarWriteContext_(resource, calendarId, eventId) {
+  const privateProps =
+    ((resource || {}).extendedProperties || {}).private || {};
+  return {
+    calendarId: calendarId || "",
+    eventId: eventId || (resource && resource.id) || "",
+    syncKey: privateProps.syncKey || "",
+    managedKind: privateProps.managedKind || "",
+    summary: (resource && resource.summary) || "",
+  };
+}
+
+function formatCalendarWriteContext_(context) {
+  const value = context || {};
+  return (
+    " calendarId=" +
+    formatCalendarWriteLogValue_(value.calendarId) +
+    " eventId=" +
+    formatCalendarWriteLogValue_(value.eventId) +
+    " syncKey=" +
+    formatCalendarWriteLogValue_(value.syncKey) +
+    " managedKind=" +
+    formatCalendarWriteLogValue_(value.managedKind) +
+    " summary=" +
+    formatCalendarWriteLogValue_(value.summary) +
+    " writeNumber=" +
+    String(value.writeNumber || "") +
+    " writesSucceeded=" +
+    CALENDAR_WRITE_DIAGNOSTICS.succeeded
+  );
+}
+
+function formatCalendarWriteLogValue_(value) {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  return JSON.stringify(normalized);
+}
+
+function classifyCalendarWriteError_(err) {
+  const text = calendarWriteErrorText_(err);
+  if (text.indexOf("calendar usage limits exceeded") >= 0) {
+    return "calendar_usage_limits";
+  }
+  if (text.indexOf("userratelimitexceeded") >= 0) {
+    return "user_rate_limit";
+  }
+  if (
+    text.indexOf("ratelimitexceeded") >= 0 ||
+    text.indexOf("rate limit exceeded") >= 0
+  ) {
+    return "rate_limit";
+  }
+  if (text.indexOf("service invoked too many times in a short time") >= 0) {
+    return "apps_script_short_term_rate";
+  }
+  if (text.indexOf("service invoked too many times") >= 0) {
+    return "apps_script_daily_quota";
+  }
+  if (text.indexOf("quota exceeded") >= 0) return "quota_exceeded";
+  return "non_quota_error";
+}
+
+function calendarWriteErrorText_(err) {
+  return String(
     (err && (err.message || err.details || (err.toString && err.toString()))) ||
       "",
   ).toLowerCase();
+}
+
+function isRetryableCalendarWriteError_(err) {
+  const text = calendarWriteErrorText_(err);
   return (
     text.indexOf("calendar usage limits exceeded") >= 0 ||
     text.indexOf("rate limit exceeded") >= 0 ||

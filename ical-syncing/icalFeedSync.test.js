@@ -965,8 +965,10 @@ test("getDriveMinutes_ logs exception details on lookup failure", () => {
 test("calendarEventInsert_ retries calendar usage limit failures", () => {
   const ctx = loadIcalSyncContext();
   const sleeps = [];
+  const warnings = [];
   let attempts = 0;
   ctx.Utilities.sleep = (ms) => sleeps.push(ms);
+  ctx.console.warn = (msg) => warnings.push(String(msg));
   ctx.Calendar.Events.insert = () => {
     attempts++;
     if (attempts < 3) {
@@ -978,7 +980,15 @@ test("calendarEventInsert_ retries calendar usage limit failures", () => {
   };
 
   const inserted = ctx.calendarEventInsert_(
-    { summary: "Practice" },
+    {
+      summary: "Practice",
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          syncKey: "feedhash:practice-1",
+        },
+      },
+    },
     "calendar-1",
     { sendUpdates: "none" },
   );
@@ -986,6 +996,115 @@ test("calendarEventInsert_ retries calendar usage limit failures", () => {
   assert.equal(inserted.id, "created-1");
   assert.equal(attempts, 3);
   assert.equal(sleeps.length, 2);
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0], /\[CALENDAR_WRITE_RETRY\] op=insert/);
+  assert.match(warnings[0], /errorType=calendar_usage_limits/);
+  assert.match(warnings[0], /attempt=1\/5/);
+  assert.match(warnings[0], /nextDelayMs=\d+/);
+  assert.match(warnings[0], /calendarId="calendar-1"/);
+  assert.match(warnings[0], /eventId="[0-9a-f]{64}"/);
+  assert.match(warnings[0], /syncKey="feedhash:practice-1"/);
+  assert.match(warnings[0], /managedKind="source"/);
+  assert.match(warnings[0], /summary="Practice"/);
+  assert.match(warnings[0], /writeNumber=1/);
+  assert.match(warnings[0], /writesSucceeded=0/);
+  assert.match(warnings[0], /Calendar usage limits exceeded/);
+});
+
+test("calendarEventInsert_ logs terminal rate-limit diagnostics", () => {
+  const ctx = loadIcalSyncContext();
+  const errors = [];
+  let attempts = 0;
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.Utilities.sleep = () => {};
+  ctx.Calendar.Events.insert = () => {
+    attempts++;
+    throw new Error("Rate Limit Exceeded");
+  };
+
+  assert.throws(
+    () =>
+      ctx.calendarEventInsert_(
+        {
+          summary: "Practice",
+          extendedProperties: {
+            private: {
+              managedKind: "source",
+              syncKey: "feedhash:practice-1",
+            },
+          },
+        },
+        "calendar-1",
+        { sendUpdates: "none" },
+      ),
+    /Rate Limit Exceeded/,
+  );
+
+  assert.equal(attempts, 5);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\[CALENDAR_WRITE_FAILED\] op=insert/);
+  assert.match(errors[0], /errorType=rate_limit/);
+  assert.match(errors[0], /attempt=5\/5/);
+  assert.match(errors[0], /retryable=true/);
+  assert.match(errors[0], /writeNumber=1/);
+  assert.match(errors[0], /writesSucceeded=0/);
+  assert.match(errors[0], /syncKey="feedhash:practice-1"/);
+});
+
+test("calendarEventInsert_ enforces deterministic Calendar event IDs", () => {
+  const ctx = loadIcalSyncContext();
+  const insertedResources = [];
+  ctx.Calendar.Events.insert = (resource) => {
+    insertedResources.push(resource);
+    return { id: resource.id };
+  };
+
+  function resourceFor(syncKey, suppliedId) {
+    return {
+      id: suppliedId,
+      summary: "Practice",
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          syncKey,
+        },
+      },
+    };
+  }
+
+  const first = ctx.calendarEventInsert_(
+    resourceFor("feedhash:uid-1", "caller-supplied-id"),
+    "calendar-1",
+    { sendUpdates: "none" },
+  );
+  const sameLogicalEvent = ctx.calendarEventInsert_(
+    resourceFor("feedhash:uid-1"),
+    "calendar-2",
+    { sendUpdates: "none" },
+  );
+  const differentLogicalEvent = ctx.calendarEventInsert_(
+    resourceFor("feedhash:uid-2"),
+    "calendar-1",
+    { sendUpdates: "none" },
+  );
+
+  assert.equal(first.id, sameLogicalEvent.id);
+  assert.notEqual(first.id, differentLogicalEvent.id);
+  assert.equal(
+    first.id,
+    ctx.buildDeterministicCalendarEventId_("feedhash:uid-1"),
+  );
+  assert.match(first.id, /^[0-9a-f]{64}$/);
+  assert.equal(insertedResources[0].id, first.id);
+  assert.notEqual(insertedResources[0].id, "caller-supplied-id");
+
+  assert.throws(
+    () =>
+      ctx.calendarEventInsert_({ summary: "Missing sync key" }, "calendar-1", {
+        sendUpdates: "none",
+      }),
+    /requires extendedProperties\.private\.syncKey/,
+  );
 });
 
 test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () => {

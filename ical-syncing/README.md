@@ -131,6 +131,8 @@ function getIcalSyncConfig() {
 - Drive placeholders are tied to source synced events using metadata (`sourceSyncKey` and `sourceEventId`) and are managed/deleted safely.
 - Arrival placeholders are tied to source synced events using metadata and are managed/deleted safely.
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
+- Every managed insert uses a deterministic Google Calendar event ID derived from its `syncKey`, preventing a retried insert from creating a second API event with a different ID.
+- Calendar write retries and terminal failures use `[CALENDAR_WRITE_RETRY]` and `[CALENDAR_WRITE_FAILED]` logs. These include the error class, operation, retry attempt/delay, calendar and event IDs, sync key, managed kind, title, and the number of writes started/succeeded in that execution.
 - Delete operations are guarded to only remove events that are verifiably managed by this script/feed.
 - On first `syncIcalFeeds()` run, the script logs all accessible calendar names/IDs once, to help with initial config.
 
