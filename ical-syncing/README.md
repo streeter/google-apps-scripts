@@ -119,6 +119,7 @@ To use interval scheduling instead, omit `triggerHours` and set `triggerEveryMin
 ## Notes
 
 - `feedMappings` can include many feed -> calendar routes.
+- Every `feedMappings` entry must have a nonblank `name`, and names must be unique after surrounding whitespace is removed.
 - A configured `triggerHours` array takes precedence over `triggerEveryMinutes`, including an empty array that disables all sync triggers.
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
 - Per-feed `timeZone` is the fallback for floating `DTSTART`/`DTEND` values when the feed does not declare a timezone. If omitted, the Apps Script project timezone is used.

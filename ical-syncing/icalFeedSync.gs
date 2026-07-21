@@ -859,7 +859,24 @@ function getIcalSyncConfig_() {
     throw new Error("Config feedMappings must be a non-empty array.");
   }
 
+  const feedMappingNameIndexes = Object.create(null);
   cfg.feedMappings.forEach(function (m, i) {
+    if (typeof m.name !== "string" || !m.name.trim()) {
+      throw new Error("feedMappings[" + i + "] missing name.");
+    }
+    m.name = m.name.trim();
+    if (Object.prototype.hasOwnProperty.call(feedMappingNameIndexes, m.name)) {
+      throw new Error(
+        "feedMappings[" +
+          i +
+          '] name "' +
+          m.name +
+          '" duplicates feedMappings[' +
+          feedMappingNameIndexes[m.name] +
+          "].name; feed mapping names must be unique.",
+      );
+    }
+    feedMappingNameIndexes[m.name] = i;
     if (!m.feedUrl) throw new Error("feedMappings[" + i + "] missing feedUrl.");
     if (!m.calendarId)
       throw new Error("feedMappings[" + i + "] missing calendarId.");

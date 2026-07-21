@@ -252,7 +252,11 @@ test("getIcalSyncConfig_ defaults minDriveMinutesToCreate to 10", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
@@ -265,7 +269,11 @@ test("getIcalSyncConfig_ defaults per-feed titlePrefix to empty string", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
@@ -278,7 +286,11 @@ test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
@@ -291,8 +303,13 @@ test("getIcalSyncConfig_ defaults destination calendar attendee to true", () => 
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
       {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
+      {
+        name: "Feed B",
         feedUrl: "https://example.com/b.ics",
         calendarId: "cal2",
         addDestinationCalendarAsAttendee: false,
@@ -310,7 +327,11 @@ test("getIcalSyncConfig_ defaults per-feed timeZone to empty", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
@@ -323,13 +344,54 @@ test("getIcalSyncConfig_ leaves triggerHours unset for interval scheduling", () 
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
   const cfg = ctx.getIcalSyncConfig_();
 
   assert.equal(cfg.triggerHours, undefined);
+});
+
+test("getIcalSyncConfig_ requires each feed mapping to have a name", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+
+  assert.throws(
+    () => ctx.getIcalSyncConfig_(),
+    /feedMappings\[0\] missing name/,
+  );
+});
+
+test("getIcalSyncConfig_ rejects duplicate feed mapping names", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
+      {
+        name: " Feed A ",
+        feedUrl: "https://example.com/b.ics",
+        calendarId: "cal2",
+      },
+    ],
+  });
+
+  assert.throws(
+    () => ctx.getIcalSyncConfig_(),
+    /feedMappings\[1\] name "Feed A" duplicates feedMappings\[0\]\.name; feed mapping names must be unique/,
+  );
 });
 
 test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
@@ -380,7 +442,11 @@ test("setupIcalFeedSyncTrigger uses hourly trigger when triggerEveryMinutes is 6
   ctx.getIcalSyncConfig = () => ({
     triggerEveryMinutes: 60,
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
@@ -396,7 +462,11 @@ test("setupIcalFeedSyncTrigger uses explicit scheduled hours when configured", (
   ctx.getIcalSyncConfig = () => ({
     triggerHours: [22, 6, 8, 10, 12, 14, 16, 18, 20],
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
 
@@ -425,7 +495,11 @@ test("setupIcalFeedSyncTrigger removes triggers for explicit empty triggerHours"
     triggerHours: [],
     triggerEveryMinutes: 60,
     feedMappings: [
-      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+      },
     ],
   });
   ctx.ScriptApp.getProjectTriggers = () => [syncTrigger, otherTrigger];
