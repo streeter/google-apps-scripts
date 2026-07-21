@@ -161,6 +161,7 @@ function syncIcalFeedsUnlocked_() {
   const today = startOfToday_();
   const results = [];
   const errors = [];
+  let calendarUsageLimitReached = false;
   console.log(
     "[SYNC] Starting iCal feed sync for " +
       cfg.feedMappings.length +
@@ -168,7 +169,8 @@ function syncIcalFeedsUnlocked_() {
   );
   console.log("[SYNC] Date cutoff (inclusive): " + today.toISOString());
 
-  cfg.feedMappings.forEach(function (mapping) {
+  for (let i = 0; i < cfg.feedMappings.length; i++) {
+    const mapping = cfg.feedMappings[i];
     try {
       results.push(syncOneFeed_(cfg, mapping, today));
     } catch (e) {
@@ -182,10 +184,19 @@ function syncIcalFeedsUnlocked_() {
         error: errorText,
       });
       errors.push(feedName + ": " + errorText);
+      if (isCalendarUsageLimitError_(e)) {
+        calendarUsageLimitReached = true;
+        console.error(
+          "[SYNC_ABORT] Calendar usage limit reached; skipping " +
+            (cfg.feedMappings.length - i - 1) +
+            " remaining feed(s) and removed-feed cleanup",
+        );
+        break;
+      }
     }
-  });
+  }
 
-  if (cfg.deleteMissingFromFeed) {
+  if (cfg.deleteMissingFromFeed && !calendarUsageLimitReached) {
     try {
       cleanupRemovedFeedEvents_(cfg, today);
     } catch (e) {
@@ -866,7 +877,8 @@ function fetchIcs_(url) {
 }
 
 /**
- * Retries Calendar write operations that hit transient usage or rate limits.
+ * Retries transient Calendar write quota/rate errors. General Calendar usage
+ * limits fail immediately so the caller can stop the rest of the sync.
  */
 function withCalendarWriteRetry_(opName, context, fn) {
   let lastError = null;
@@ -931,8 +943,80 @@ function calendarEventInsert_(resource, calendarId, options) {
     insertResource.id,
   );
   return withCalendarWriteRetry_("insert", context, function () {
-    return Calendar.Events.insert(insertResource, calendarId, options);
+    try {
+      return Calendar.Events.insert(insertResource, calendarId, options);
+    } catch (e) {
+      if (!isDuplicateCalendarEventIdError_(e)) throw e;
+      return recoverDeterministicCalendarEventInsert_(
+        insertResource,
+        calendarId,
+        context,
+        e,
+      );
+    }
   });
+}
+
+/**
+ * Treats an existing matching deterministic event as a successful insert.
+ * This covers an insert that committed in Calendar before the client saw a
+ * transient failure and then returned a duplicate-ID conflict on retry.
+ */
+function recoverDeterministicCalendarEventInsert_(
+  resource,
+  calendarId,
+  context,
+  insertError,
+) {
+  let existing;
+  try {
+    existing = Calendar.Events.get(calendarId, resource.id);
+  } catch (lookupError) {
+    console.warn(
+      "[CALENDAR_INSERT_RECOVERY_FAILED]" +
+        formatCalendarWriteContext_(context) +
+        " insertError=" +
+        formatCalendarWriteLogValue_(String(insertError)) +
+        " lookupError=" +
+        formatCalendarWriteLogValue_(String(lookupError)),
+    );
+    throw insertError;
+  }
+
+  const expectedSyncKey = String(
+    (((resource || {}).extendedProperties || {}).private || {}).syncKey || "",
+  );
+  const existingSyncKey = String(
+    (((existing || {}).extendedProperties || {}).private || {}).syncKey || "",
+  );
+  const existingStatus = String((existing && existing.status) || "");
+
+  if (
+    existing &&
+    existing.id === resource.id &&
+    existingStatus !== "cancelled" &&
+    existingSyncKey === expectedSyncKey
+  ) {
+    console.warn(
+      "[CALENDAR_INSERT_RECOVERED] duplicate deterministic ID matched " +
+        "the managed event already stored by Calendar" +
+        formatCalendarWriteContext_(context),
+    );
+    return existing;
+  }
+
+  throw new Error(
+    "Deterministic Calendar event ID conflict for " +
+      resource.id +
+      ": expected syncKey " +
+      expectedSyncKey +
+      ", found syncKey " +
+      existingSyncKey +
+      " with status " +
+      (existingStatus || "unknown") +
+      ". Original insert error: " +
+      String(insertError),
+  );
 }
 
 function calendarEventPatch_(resource, calendarId, eventId, options) {
@@ -1051,6 +1135,20 @@ function classifyCalendarWriteError_(err) {
   return "non_quota_error";
 }
 
+function isCalendarUsageLimitError_(err) {
+  return classifyCalendarWriteError_(err) === "calendar_usage_limits";
+}
+
+function isDuplicateCalendarEventIdError_(err) {
+  const text = calendarWriteErrorText_(err);
+  return (
+    text.indexOf("requested identifier already exists") >= 0 ||
+    (text.indexOf("already exists") >= 0 && text.indexOf("duplicate") >= 0) ||
+    text.indexOf('reason": "duplicate') >= 0 ||
+    text.indexOf("reason: duplicate") >= 0
+  );
+}
+
 function calendarWriteErrorText_(err) {
   return String(
     (err && (err.message || err.details || (err.toString && err.toString()))) ||
@@ -1061,7 +1159,6 @@ function calendarWriteErrorText_(err) {
 function isRetryableCalendarWriteError_(err) {
   const text = calendarWriteErrorText_(err);
   return (
-    text.indexOf("calendar usage limits exceeded") >= 0 ||
     text.indexOf("rate limit exceeded") >= 0 ||
     text.indexOf("userratelimitexceeded") >= 0 ||
     text.indexOf("ratelimitexceeded") >= 0 ||

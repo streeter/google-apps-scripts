@@ -148,6 +148,9 @@ function loadIcalSyncContext() {
         remove: () => {
           throw new Error("Calendar.Events.remove mock not set");
         },
+        get: () => {
+          throw new Error("Calendar.Events.get mock not set");
+        },
         list: () => ({ items: [] }),
       },
     },
@@ -485,9 +488,11 @@ test("syncIcalFeeds releases its script lock after a failure", () => {
   assert.equal(ctx.__lockState.released, true);
 });
 
-test("syncIcalFeeds groups identical per-feed failures in the summary error", () => {
+test("syncIcalFeeds aborts remaining work after a Calendar usage limit", () => {
   const ctx = loadIcalSyncContext();
   const errors = [];
+  const syncedFeeds = [];
+  let cleanupCalls = 0;
 
   ctx.console.error = (msg) => errors.push(String(msg));
   ctx.getIcalSyncConfig = () => ({
@@ -504,21 +509,27 @@ test("syncIcalFeeds groups identical per-feed failures in the summary error", ()
       },
     ],
   });
-  ctx.syncOneFeed_ = () => {
+  ctx.syncOneFeed_ = (_cfg, mapping) => {
+    syncedFeeds.push(mapping.name);
     throw new Error(
       "GoogleJsonResponseException: API call to calendar.events.insert failed with error: Calendar usage limits exceeded.",
     );
   };
+  ctx.cleanupRemovedFeedEvents_ = () => {
+    cleanupCalls++;
+  };
 
   assert.throws(
     () => ctx.syncIcalFeeds(),
-    /syncIcalFeeds completed with 1 error\(s\): Chestnutwold, Haverford School District: Error: GoogleJsonResponseException: API call to calendar\.events\.insert failed with error: Calendar usage limits exceeded\./,
+    /syncIcalFeeds completed with 1 error\(s\): Chestnutwold: Error: GoogleJsonResponseException: API call to calendar\.events\.insert failed with error: Calendar usage limits exceeded\./,
   );
+  assert.deepEqual(syncedFeeds, ["Chestnutwold"]);
+  assert.equal(cleanupCalls, 0);
   assert.equal(errors.length, 2);
   assert.match(errors[0], /\[ERROR\] Failed syncing feed Chestnutwold:/);
   assert.match(
     errors[1],
-    /\[ERROR\] Failed syncing feed Haverford School District:/,
+    /\[SYNC_ABORT\] Calendar usage limit reached; skipping 1 remaining feed/,
   );
 });
 
@@ -962,53 +973,55 @@ test("getDriveMinutes_ logs exception details on lookup failure", () => {
   assert.match(errors[0], /quota exceeded/);
 });
 
-test("calendarEventInsert_ retries calendar usage limit failures", () => {
+test("calendarEventInsert_ fails fast on Calendar usage limits", () => {
   const ctx = loadIcalSyncContext();
   const sleeps = [];
   const warnings = [];
+  const errors = [];
   let attempts = 0;
   ctx.Utilities.sleep = (ms) => sleeps.push(ms);
   ctx.console.warn = (msg) => warnings.push(String(msg));
+  ctx.console.error = (msg) => errors.push(String(msg));
   ctx.Calendar.Events.insert = () => {
     attempts++;
-    if (attempts < 3) {
-      throw new Error(
-        "GoogleJsonResponseException: Calendar usage limits exceeded.",
-      );
-    }
-    return { id: "created-1" };
+    throw new Error(
+      "GoogleJsonResponseException: Calendar usage limits exceeded.",
+    );
   };
 
-  const inserted = ctx.calendarEventInsert_(
-    {
-      summary: "Practice",
-      extendedProperties: {
-        private: {
-          managedKind: "source",
-          syncKey: "feedhash:practice-1",
+  assert.throws(
+    () =>
+      ctx.calendarEventInsert_(
+        {
+          summary: "Practice",
+          extendedProperties: {
+            private: {
+              managedKind: "source",
+              syncKey: "feedhash:practice-1",
+            },
+          },
         },
-      },
-    },
-    "calendar-1",
-    { sendUpdates: "none" },
+        "calendar-1",
+        { sendUpdates: "none" },
+      ),
+    /Calendar usage limits exceeded/,
   );
 
-  assert.equal(inserted.id, "created-1");
-  assert.equal(attempts, 3);
-  assert.equal(sleeps.length, 2);
-  assert.equal(warnings.length, 2);
-  assert.match(warnings[0], /\[CALENDAR_WRITE_RETRY\] op=insert/);
-  assert.match(warnings[0], /errorType=calendar_usage_limits/);
-  assert.match(warnings[0], /attempt=1\/5/);
-  assert.match(warnings[0], /nextDelayMs=\d+/);
-  assert.match(warnings[0], /calendarId="calendar-1"/);
-  assert.match(warnings[0], /eventId="[0-9a-f]{64}"/);
-  assert.match(warnings[0], /syncKey="feedhash:practice-1"/);
-  assert.match(warnings[0], /managedKind="source"/);
-  assert.match(warnings[0], /summary="Practice"/);
-  assert.match(warnings[0], /writeNumber=1/);
-  assert.match(warnings[0], /writesSucceeded=0/);
-  assert.match(warnings[0], /Calendar usage limits exceeded/);
+  assert.equal(attempts, 1);
+  assert.equal(sleeps.length, 0);
+  assert.equal(warnings.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\[CALENDAR_WRITE_FAILED\] op=insert/);
+  assert.match(errors[0], /errorType=calendar_usage_limits/);
+  assert.match(errors[0], /attempt=1\/5/);
+  assert.match(errors[0], /retryable=false/);
+  assert.match(errors[0], /calendarId="calendar-1"/);
+  assert.match(errors[0], /eventId="[0-9a-f]{64}"/);
+  assert.match(errors[0], /syncKey="feedhash:practice-1"/);
+  assert.match(errors[0], /managedKind="source"/);
+  assert.match(errors[0], /summary="Practice"/);
+  assert.match(errors[0], /writeNumber=1/);
+  assert.match(errors[0], /writesSucceeded=0/);
 });
 
 test("calendarEventInsert_ logs terminal rate-limit diagnostics", () => {
@@ -1105,6 +1118,98 @@ test("calendarEventInsert_ enforces deterministic Calendar event IDs", () => {
       }),
     /requires extendedProperties\.private\.syncKey/,
   );
+});
+
+test("calendarEventInsert_ recovers a matching deterministic ID conflict", () => {
+  const ctx = loadIcalSyncContext();
+  const warnings = [];
+  const errors = [];
+  let getArgs;
+  const syncKey = "feedhash:uid-1";
+  const eventId = ctx.buildDeterministicCalendarEventId_(syncKey);
+  const existing = {
+    id: eventId,
+    status: "confirmed",
+    summary: "Practice",
+    extendedProperties: {
+      private: {
+        managedKind: "source",
+        syncKey,
+      },
+    },
+  };
+  ctx.console.warn = (msg) => warnings.push(String(msg));
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("The requested identifier already exists.");
+  };
+  ctx.Calendar.Events.get = (calendarId, requestedEventId) => {
+    getArgs = [calendarId, requestedEventId];
+    return existing;
+  };
+
+  const result = ctx.calendarEventInsert_(
+    {
+      summary: "Practice",
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          syncKey,
+        },
+      },
+    },
+    "calendar-1",
+    { sendUpdates: "none" },
+  );
+
+  assert.equal(result, existing);
+  assert.deepEqual(getArgs, ["calendar-1", eventId]);
+  assert.equal(errors.length, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /\[CALENDAR_INSERT_RECOVERED\]/);
+  assert.match(warnings[0], /eventId="[0-9a-f]{64}"/);
+  assert.match(warnings[0], /syncKey="feedhash:uid-1"/);
+  assert.match(warnings[0], /writesSucceeded=0/);
+});
+
+test("calendarEventInsert_ rejects a mismatched deterministic ID conflict", () => {
+  const ctx = loadIcalSyncContext();
+  const errors = [];
+  ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("The requested identifier already exists.");
+  };
+  ctx.Calendar.Events.get = (_calendarId, eventId) => ({
+    id: eventId,
+    status: "confirmed",
+    extendedProperties: {
+      private: {
+        syncKey: "another-feed:uid-2",
+      },
+    },
+  });
+
+  assert.throws(
+    () =>
+      ctx.calendarEventInsert_(
+        {
+          summary: "Practice",
+          extendedProperties: {
+            private: {
+              managedKind: "source",
+              syncKey: "feedhash:uid-1",
+            },
+          },
+        },
+        "calendar-1",
+        { sendUpdates: "none" },
+      ),
+    /Deterministic Calendar event ID conflict/,
+  );
+
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /\[CALENDAR_WRITE_FAILED\] op=insert/);
+  assert.match(errors[0], /errorType=non_quota_error/);
 });
 
 test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () => {
