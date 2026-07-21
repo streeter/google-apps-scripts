@@ -1,5 +1,5 @@
 /**
- * iCal -> Google Calendar sync (future events), with update + target calendar attendee injection.
+ * iCal -> Google Calendar sync (future events), with updates and optional attendees.
  *
  * This script expects a separate config file that defines:
  *   function getIcalSyncConfig() { return { ... }; }
@@ -278,7 +278,11 @@ function syncOneFeed_(cfg, mapping, today) {
       ? mapping.attendeeEmails
       : cfg.defaultAttendeeEmails) || [],
   );
-  const sourceAttendees = buildSourceAttendees_(attendees, mapping.calendarId);
+  const sourceAttendees = buildSourceAttendees_(
+    attendees,
+    mapping.calendarId,
+    mapping.addDestinationCalendarAsAttendee,
+  );
   const activePeerFeedHashes = buildActivePeerFeedHashes_(
     cfg,
     mapping.calendarId,
@@ -525,10 +529,17 @@ function syncOneFeed_(cfg, mapping, today) {
       targetCalendarDeclined || isAllAttendeesDeclinedEvent_(existing);
     const patchAttendees = targetCalendarDeclined
       ? buildDeclinedAttendees_(existing, mapping.calendarId)
-      : sourceAttendees;
+      : resolveAttendeesForExistingManagedEvent_(
+          sourceAttendees,
+          existing,
+          mapping.addDestinationCalendarAsAttendee,
+        );
+    const patchHashAttendees = targetCalendarDeclined
+      ? patchAttendees
+      : getAttendeeEmails_(patchAttendees);
     const oldHash =
       ((existing.extendedProperties || {}).private || {}).syncHash || "";
-    const patchHash = computeEventHash_(effectiveEvt, patchAttendees);
+    const patchHash = computeEventHash_(effectiveEvt, patchHashAttendees);
     const changedFromLastFeedState = oldHash !== patchHash;
     const patchResource = buildEventPatchResource_(
       effectiveEvt,
@@ -844,6 +855,8 @@ function getIcalSyncConfig_() {
     if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
     if (typeof m.timeZone !== "string") m.timeZone = "";
     if (typeof m.skipAllDayEvents !== "boolean") m.skipAllDayEvents = false;
+    if (typeof m.addDestinationCalendarAsAttendee !== "boolean")
+      m.addDestinationCalendarAsAttendee = true;
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
     if (typeof m.originAddress !== "string") m.originAddress = "";
@@ -1685,10 +1698,49 @@ function buildPlaceNameAddressRules_(cfg, mapping) {
 }
 
 /**
- * Returns configured source-event attendees plus the target calendar.
+ * Returns configured attendees, optionally including the destination calendar.
  */
-function buildSourceAttendees_(attendees, calendarId) {
-  return uniqueEmails_((attendees || []).concat([calendarId]));
+function buildSourceAttendees_(
+  attendees,
+  calendarId,
+  addDestinationCalendarAsAttendee,
+) {
+  const values = (attendees || []).slice();
+  if (addDestinationCalendarAsAttendee !== false) values.push(calendarId);
+  return uniqueEmails_(values);
+}
+
+/**
+ * Makes attendee removal fix-forward when the destination calendar is no
+ * longer added automatically. Existing managed events retain their complete
+ * attendee list, while new events use only the newly configured attendees.
+ */
+function resolveAttendeesForExistingManagedEvent_(
+  configuredAttendees,
+  existingEvent,
+  addDestinationCalendarAsAttendee,
+) {
+  if (addDestinationCalendarAsAttendee !== false || !existingEvent) {
+    return (configuredAttendees || []).slice();
+  }
+
+  return ((existingEvent && existingEvent.attendees) || [])
+    .filter(function (attendee) {
+      return !!(attendee && attendee.email);
+    })
+    .map(function (attendee) {
+      return Object.assign({}, attendee);
+    });
+}
+
+function getAttendeeEmails_(attendees) {
+  return uniqueEmails_(
+    (attendees || []).map(function (attendee) {
+      return typeof attendee === "string"
+        ? attendee
+        : attendee && attendee.email;
+    }),
+  );
 }
 
 /**
@@ -2364,6 +2416,11 @@ function reconcileArrivalPlaceholder_(
     arrivalTitle,
     arrivalMinutes,
   );
+  const arrivalAttendees = resolveAttendeesForExistingManagedEvent_(
+    attendees,
+    existingArrival,
+    mapping.addDestinationCalendarAsAttendee,
+  );
   const arrivalResource = buildArrivalPlaceholderResource_(
     mapping,
     feedHash,
@@ -2377,7 +2434,7 @@ function reconcileArrivalPlaceholder_(
     arrivalEnd,
     arrivalHash,
     arrivalMinutes,
-    attendees,
+    arrivalAttendees,
   );
   seenArrival[arrivalSyncKey] = true;
   const existingArrivalHash = (
@@ -2636,6 +2693,11 @@ function reconcileDrivePlaceholder_(
     driveEnd,
     driveTitle,
   );
+  const driveAttendees = resolveAttendeesForExistingManagedEvent_(
+    attendees,
+    existingDrive,
+    mapping.addDestinationCalendarAsAttendee,
+  );
   const driveResource = buildDrivePlaceholderResource_(
     mapping,
     feedHash,
@@ -2650,7 +2712,7 @@ function reconcileDrivePlaceholder_(
     driveHash,
     driveOrigin,
     destination,
-    attendees,
+    driveAttendees,
     drivePlan.previousEventId || "",
   );
   seenDrive[driveSyncKey] = true;

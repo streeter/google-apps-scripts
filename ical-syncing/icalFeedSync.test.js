@@ -287,6 +287,25 @@ test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
   assert.equal(cfg.feedMappings[0].skipAllDayEvents, false);
 });
 
+test("getIcalSyncConfig_ defaults destination calendar attendee to true", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+      {
+        feedUrl: "https://example.com/b.ics",
+        calendarId: "cal2",
+        addDestinationCalendarAsAttendee: false,
+      },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+
+  assert.equal(cfg.feedMappings[0].addDestinationCalendarAsAttendee, true);
+  assert.equal(cfg.feedMappings[1].addDestinationCalendarAsAttendee, false);
+});
+
 test("getIcalSyncConfig_ defaults per-feed timeZone to empty", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
@@ -1755,6 +1774,16 @@ test("attendee selection uses configured attendees and ignores current user", ()
     JSON.stringify(["coach@example.com", "calendar-1"]),
   );
   assert.equal(
+    JSON.stringify(
+      ctx.buildSourceAttendees_(["coach@example.com"], "calendar-1", false),
+    ),
+    JSON.stringify(["coach@example.com"]),
+  );
+  assert.equal(
+    JSON.stringify(ctx.buildSourceAttendees_([], "calendar-1", false)),
+    JSON.stringify([]),
+  );
+  assert.equal(
     ctx.isTargetCalendarDeclinedEvent_(existing, "calendar-1"),
     false,
   );
@@ -1817,6 +1846,27 @@ test("syncOneFeed_ uses defaults only when attendeeEmails is omitted", () => {
   assert.equal(
     JSON.stringify(inserts[0].attendees),
     JSON.stringify([{ email: "coach@example.com" }, { email: "calendar-1" }]),
+  );
+
+  inserts.length = 0;
+  ctx.syncOneFeed_(
+    cfg,
+    {
+      name: "Destination Not Attendee",
+      feedUrl: "https://example.com/feed.ics",
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      attendeeEmails: ["parent@example.com"],
+      addDestinationCalendarAsAttendee: false,
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(
+    JSON.stringify(inserts[0].attendees),
+    JSON.stringify([{ email: "parent@example.com" }]),
   );
 });
 
@@ -2007,7 +2057,7 @@ test("eventBoundaryToDate_ honors the timezone on a floating boundary", () => {
   assert.equal(date.toISOString(), "2026-08-18T21:00:00.000Z");
 });
 
-test("syncOneFeed_ leaves unchanged events unpatched", () => {
+test("syncOneFeed_ preserves attendees on existing events when exclusion is fix-forward", () => {
   const ctx = loadIcalSyncContext();
   const feedUrl = "https://example.com/feed.ics";
   const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
@@ -2034,7 +2084,10 @@ test("syncOneFeed_ leaves unchanged events unpatched", () => {
       summary: "Practice",
       start: { dateTime: "2099-05-01T15:00:00.000Z" },
       end: { dateTime: "2099-05-01T16:00:00.000Z" },
-      attendees: [{ email: "calendar-1" }],
+      attendees: [
+        { email: "calendar-1", responseStatus: "accepted" },
+        { email: "legacy-guest@example.com", responseStatus: "accepted" },
+      ],
       extendedProperties: {
         private: {
           managedKind: "source",
@@ -2042,7 +2095,10 @@ test("syncOneFeed_ leaves unchanged events unpatched", () => {
           sourceUrl: feedUrl,
           sourceUid: "uid-1",
           syncKey: sourceSyncKey,
-          syncHash: ctx.computeEventHash_(parsedEvent, ["calendar-1"]),
+          syncHash: ctx.computeEventHash_(parsedEvent, [
+            "calendar-1",
+            "legacy-guest@example.com",
+          ]),
         },
       },
     },
@@ -2071,6 +2127,8 @@ test("syncOneFeed_ leaves unchanged events unpatched", () => {
       feedUrl: feedUrl,
       calendarId: "calendar-1",
       titlePrefix: "",
+      attendeeEmails: [],
+      addDestinationCalendarAsAttendee: false,
       addDriveTimePlaceholders: false,
       originAddress: "",
     },
@@ -2182,7 +2240,10 @@ test("syncOneFeed_ treats Calendar offset timestamps as the same feed time", () 
       summary: "Wildwood: 2 PM Release Grades 1-3",
       start: { dateTime: "2026-08-18T14:00:00-07:00" },
       end: { dateTime: "2026-08-18T14:30:00-07:00" },
-      attendees: [{ email: "calendar-1" }],
+      attendees: [
+        { email: "calendar-1", responseStatus: "accepted" },
+        { email: "legacy-guest@example.com", responseStatus: "accepted" },
+      ],
       extendedProperties: {
         private: {
           managedKind: "source",
@@ -2267,7 +2328,10 @@ test("syncOneFeed_ patches unchanged feed events when destination time drifted",
         dateTime: "2099-05-01T15:00:00",
         timeZone: "America/New_York",
       },
-      attendees: [{ email: "calendar-1" }],
+      attendees: [
+        { email: "calendar-1", responseStatus: "accepted" },
+        { email: "legacy-guest@example.com", responseStatus: "accepted" },
+      ],
       extendedProperties: {
         private: {
           managedKind: "source",
@@ -2275,7 +2339,10 @@ test("syncOneFeed_ patches unchanged feed events when destination time drifted",
           sourceUrl: feedUrl,
           sourceUid: "uid-1",
           syncKey: sourceSyncKey,
-          syncHash: ctx.computeEventHash_(parsedEvent, ["calendar-1"]),
+          syncHash: ctx.computeEventHash_(parsedEvent, [
+            "calendar-1",
+            "legacy-guest@example.com",
+          ]),
         },
       },
     },
@@ -2312,6 +2379,8 @@ test("syncOneFeed_ patches unchanged feed events when destination time drifted",
       feedUrl: feedUrl,
       calendarId: "calendar-1",
       titlePrefix: "",
+      attendeeEmails: [],
+      addDestinationCalendarAsAttendee: false,
       addDriveTimePlaceholders: false,
       originAddress: "",
     },
@@ -2334,6 +2403,13 @@ test("syncOneFeed_ patches unchanged feed events when destination time drifted",
       dateTime: "2099-05-01T15:00:00",
       timeZone: "America/Los_Angeles",
     }),
+  );
+  assert.equal(
+    JSON.stringify(patched.attendees),
+    JSON.stringify([
+      { email: "calendar-1", responseStatus: "accepted" },
+      { email: "legacy-guest@example.com", responseStatus: "accepted" },
+    ]),
   );
 });
 
@@ -2587,7 +2663,7 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   );
 });
 
-test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", () => {
+test("syncOneFeed_ creates attendee-free source and placeholders when configured", () => {
   const ctx = loadIcalSyncContext();
   const inserts = [];
 
@@ -2656,6 +2732,7 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
     feedUrl: "https://example.com/sports.ics",
     calendarId: "b@example.com",
     attendeeEmails: [],
+    addDestinationCalendarAsAttendee: false,
     titlePrefix: "[Sports]",
     addDriveTimePlaceholders: true,
     originAddress: "",
@@ -2690,23 +2767,143 @@ test("syncOneFeed_ creates arrival placeholder and moves drive before arrival", 
   assert.ok(arrival);
   assert.ok(drive);
   assert.equal(source.summary, "[Sports] Soccer Game");
-  assert.equal(
-    JSON.stringify(source.attendees),
-    JSON.stringify([{ email: "b@example.com" }]),
-  );
+  assert.equal(JSON.stringify(source.attendees), JSON.stringify([]));
   assert.equal(arrival.summary, "Advanced arrival for [Sports] Soccer Game");
   assert.equal(arrival.start.dateTime, "2099-05-01T15:00:00.000Z");
   assert.equal(arrival.end.dateTime, "2099-05-01T15:30:00.000Z");
   assert.equal(drive.end.dateTime, "2099-05-01T15:00:00.000Z");
   assert.equal(drive.start.dateTime, "2099-05-01T14:35:00.000Z");
-  assert.equal(
-    JSON.stringify(arrival.attendees),
-    JSON.stringify([{ email: "b@example.com" }]),
+  assert.equal(JSON.stringify(arrival.attendees), JSON.stringify([]));
+  assert.equal(JSON.stringify(drive.attendees), JSON.stringify([]));
+});
+
+test("existing arrival and drive placeholders preserve attendees when updated", () => {
+  const ctx = loadIcalSyncContext();
+  const patched = [];
+  const feedHash = "feedhash123";
+  const sourceSyncKey = feedHash + ":source-sync";
+  const arrivalSyncKey = ctx.buildArrivalSyncKey_(sourceSyncKey);
+  const driveSyncKey = ctx.buildDriveSyncKey_(sourceSyncKey);
+  const legacyAttendees = [
+    { email: "calendar-1", responseStatus: "accepted" },
+    { email: "legacy-guest@example.com", responseStatus: "accepted" },
+  ];
+  const mapping = {
+    feedUrl: "https://example.com/feed.ics",
+    calendarId: "calendar-1",
+    addDestinationCalendarAsAttendee: false,
+  };
+  const evt = {
+    uid: "uid-1",
+    summary: "Practice",
+    description: "Arrival: 30 minutes in advance",
+    location: "Seattle, WA",
+    start: { type: "dateTime", dateTime: "2099-05-01T15:30:00Z" },
+    end: { type: "dateTime", dateTime: "2099-05-01T16:30:00Z" },
+  };
+  const syncedEvent = {
+    id: "source-1",
+    start: { dateTime: "2099-05-01T15:30:00Z" },
+  };
+  const existingArrivalByKey = {
+    [arrivalSyncKey]: {
+      id: "arrival-1",
+      attendees: legacyAttendees,
+      extendedProperties: {
+        private: {
+          managedKind: "arrival",
+          sourceFeed: feedHash,
+          sourceUrl: mapping.feedUrl,
+          sourceUid: evt.uid,
+          syncKey: arrivalSyncKey,
+          sourceSyncKey,
+          syncHash: "outdated-arrival-hash",
+        },
+      },
+    },
+  };
+  const existingDriveByKey = {
+    [driveSyncKey]: {
+      id: "drive-1",
+      attendees: legacyAttendees,
+      extendedProperties: {
+        private: {
+          managedKind: "drive",
+          sourceFeed: feedHash,
+          sourceUrl: mapping.feedUrl,
+          sourceUid: evt.uid,
+          syncKey: driveSyncKey,
+          sourceSyncKey,
+          syncHash: "outdated-drive-hash",
+        },
+      },
+    },
+  };
+  const stats = baseStats();
+
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = (resource, calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    patched.push({ resource, eventId });
+    return resource;
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+  ctx.findPreviousDriveOriginEvent_ = () => null;
+  ctx.getDriveMinutes_ = () => 25;
+
+  ctx.reconcileArrivalPlaceholder_(
+    evt,
+    syncedEvent,
+    mapping,
+    feedHash,
+    sourceSyncKey,
+    arrivalSyncKey,
+    existingArrivalByKey,
+    {},
+    new Date("2026-01-01T00:00:00Z"),
+    stats,
+    [],
   );
-  assert.equal(
-    JSON.stringify(drive.attendees),
-    JSON.stringify([{ email: "b@example.com" }]),
+  ctx.reconcileDrivePlaceholder_(
+    evt,
+    syncedEvent,
+    mapping,
+    feedHash,
+    sourceSyncKey,
+    driveSyncKey,
+    {
+      enabled: true,
+      originAddress: "New York, NY",
+      placeNameAddressRules: [],
+      minDriveMinutesToCreate: 10,
+      titleTemplate: "Drive to {{title}}",
+    },
+    existingDriveByKey,
+    {},
+    new Date("2026-01-01T00:00:00Z"),
+    stats,
+    {},
+    null,
+    [],
   );
+
+  assert.equal(stats.arrivalUpdated, 1);
+  assert.equal(stats.driveUpdated, 1);
+  assert.equal(patched.length, 2);
+  assert.deepEqual(
+    patched.map((entry) => entry.eventId),
+    ["arrival-1", "drive-1"],
+  );
+  patched.forEach((entry) => {
+    assert.equal(
+      JSON.stringify(entry.resource.attendees),
+      JSON.stringify(legacyAttendees),
+    );
+  });
 });
 
 test("syncOneFeed_ preserves a target calendar decline and removes placeholders", () => {

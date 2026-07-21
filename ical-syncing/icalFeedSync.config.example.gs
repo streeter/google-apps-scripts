@@ -31,7 +31,7 @@ function getIcalSyncConfig() {
     driveEventTitleTemplate: "Drive ({{minutes}}m) to {{title}}",
 
     // Optional extra attendees added to all synced events, unless overridden per feed.
-    // Leave empty to add only the target calendarId.
+    // The destination calendar is controlled separately per feed below.
     defaultAttendeeEmails: [],
 
     // One mapping per ICS feed -> target Google Calendar
@@ -54,6 +54,12 @@ function getIcalSyncConfig() {
         // If omitted, defaultAttendeeEmails is used.
         // If provided as [], no extra attendees are added.
         attendeeEmails: [],
+
+        // The event is already inserted directly into calendarId. Set this to
+        // false to avoid also listing that destination calendar as an attendee.
+        // This is fix-forward: existing managed events keep their attendees.
+        // Defaults to true for backward compatibility.
+        addDestinationCalendarAsAttendee: false,
 
         // Optional per-feed filter. When true, all-day source events are skipped.
         skipAllDayEvents: false,
@@ -78,6 +84,7 @@ function getIcalSyncConfig() {
       //   calendarId: "another_calendar_id@group.calendar.google.com",
       //   titlePrefix: "[Another]",
       //   skipAllDayEvents: true,
+      //   addDestinationCalendarAsAttendee: false,
       //   attendeeEmails: ["special-person@yourcompany.com"]
       // }
     ],
