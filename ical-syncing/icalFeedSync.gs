@@ -297,7 +297,11 @@ function syncOneFeed_(cfg, mapping, today) {
 
   const icsText = fetchIcs_(mapping.feedUrl);
   const parsed = parseIcs_(icsText, mapping.timeZone);
-  const existingByKey = loadExistingEventsByKey_(mapping.calendarId, feedHash);
+  const existingByKey = loadExistingEventsByKey_(
+    mapping.calendarId,
+    feedHash,
+    feedName,
+  );
   const existingArrivalByKey = loadExistingArrivalEventsByKey_(
     mapping.calendarId,
     feedHash,
@@ -354,13 +358,19 @@ function syncOneFeed_(cfg, mapping, today) {
     const effectiveEvt = applyPlaceNameAddressToEvent_(
       applyEventTitlePrefix_(evt, mapping.titlePrefix),
       driveOpts.placeNameAddressRules,
+      mapping,
     );
     if (mapping.skipAllDayEvents && isAllDayEvent_(effectiveEvt)) {
       stats.skipped++;
       console.info(
-        '[SKIP] All-day event filtered "' +
-          (effectiveEvt.summary || "(No title)") +
-          '"',
+        "[SKIP] " +
+          formatEventLogContext_(
+            effectiveEvt,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — filtered by skipAllDayEvents",
       );
       return;
     }
@@ -373,25 +383,43 @@ function syncOneFeed_(cfg, mapping, today) {
     if (evt.cancelled) {
       if (!isEventOnOrAfterCutoff_(evt, today)) {
         stats.skipped++;
-        console.info("[SKIP] Not processing cancel for event in the past");
+        console.info(
+          "[SKIP] " +
+            formatEventLogContext_(
+              evt,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — canceled upstream, but event is before the sync cutoff",
+        );
         return;
       }
       if (existing) {
         if (isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
-          calendarEventRemove_(mapping.calendarId, existing.id);
+          calendarEventRemove_(mapping.calendarId, existing.id, existing);
           stats.deleted++;
           console.log(
-            "[DELETE] Deleted canceled event " +
-              existing.id +
-              " from " +
-              feedName,
+            "[DELETE] " +
+              formatEventLogContext_(
+                existing,
+                mapping.calendarId,
+                feedName,
+                "source event",
+              ) +
+              " — canceled upstream",
           );
         } else {
           stats.skipped++;
           console.info(
-            "[SKIP] Not deleting non-managed event " +
-              existing.id +
-              " (cancelled upstream)",
+            "[SKIP] " +
+              formatEventLogContext_(
+                existing,
+                mapping.calendarId,
+                feedName,
+                "source event",
+              ) +
+              " — canceled upstream, but event is not managed by this feed",
           );
         }
       } else {
@@ -421,9 +449,14 @@ function syncOneFeed_(cfg, mapping, today) {
     if (!shouldSyncEvent_(effectiveEvt, today)) {
       stats.skipped++;
       console.info(
-        '[SKIP] Event in the past "' +
-          (effectiveEvt.summary || "(No title)") +
-          '"',
+        "[SKIP] " +
+          formatEventLogContext_(
+            effectiveEvt,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — event is before the sync cutoff",
       );
       return;
     }
@@ -433,6 +466,7 @@ function syncOneFeed_(cfg, mapping, today) {
       mapping.feedUrl,
       feedHash,
       syncKey,
+      feedName,
       sourceAttendees,
       parsed.calendarTimezone,
     );
@@ -451,9 +485,14 @@ function syncOneFeed_(cfg, mapping, today) {
       if (duplicateResolution.skipCreate) {
         stats.skipped++;
         console.info(
-          '[SKIP] Not creating duplicate event "' +
-            (effectiveEvt.summary || "(No title)") +
-            '" because an actively synced peer event already exists',
+          "[SKIP] " +
+            formatEventLogContext_(
+              effectiveEvt,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — actively synced peer event already exists",
         );
         return;
       }
@@ -465,15 +504,29 @@ function syncOneFeed_(cfg, mapping, today) {
         });
       } catch (e) {
         console.error(
-          '[ERROR] Failed creating event "' +
-            (effectiveEvt.summary || "(No title)") +
-            '": ' +
+          "[ERROR] " +
+            formatEventLogContext_(
+              effectiveEvt,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — create failed: " +
             String(e),
         );
         throw e;
       }
       stats.created++;
-      console.log('[CREATE] "' + (effectiveEvt.summary || "(No title)") + '"');
+      console.log(
+        "[CREATE] " +
+          formatEventLogContext_(
+            effectiveEvt,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — new feed event",
+      );
       const arrivalAnchorStart = reconcileArrivalPlaceholder_(
         effectiveEvt,
         inserted,
@@ -509,18 +562,17 @@ function syncOneFeed_(cfg, mapping, today) {
     if (!isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
       stats.skipped++;
       console.info(
-        "[SKIP] Not updating event " +
-          existing.id +
-          " because it is not managed by this feed",
+        "[SKIP] " +
+          formatEventLogContext_(
+            existing,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — event is not managed by this feed; source and placeholders were not updated",
       );
       stats.driveSkipped++;
-      console.info(
-        "[SKIP] Drive placeholder skipped because source event is unmanaged",
-      );
       stats.arrivalSkipped++;
-      console.info(
-        "[SKIP] Arrival placeholder skipped because source event is unmanaged",
-      );
       return;
     }
 
@@ -549,6 +601,7 @@ function syncOneFeed_(cfg, mapping, today) {
       mapping.feedUrl,
       feedHash,
       syncKey,
+      feedName,
       patchAttendees,
       parsed.calendarTimezone,
     );
@@ -560,17 +613,25 @@ function syncOneFeed_(cfg, mapping, today) {
     if (!changedFromLastFeedState && !changedFromDestinationState) {
       stats.unchanged++;
       console.log(
-        '[UNCHANGED] "' +
-          (effectiveEvt.summary || "(No title)") +
-          '" (' +
-          existing.id +
-          ")",
+        "[UNCHANGED] " +
+          formatEventLogContext_(
+            effectiveEvt,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — no feed or destination changes detected",
       );
       if (destinationDeclined) {
         console.info(
-          '[DECLINE] Preserving local decline for "' +
-            (effectiveEvt.summary || "(No title)") +
-            '" and removing managed placeholders',
+          "[DECLINE] " +
+            formatEventLogContext_(
+              effectiveEvt,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — preserving local decline and removing managed placeholders",
         );
         maybeDeleteArrivalPlaceholder_(
           mapping,
@@ -631,21 +692,28 @@ function syncOneFeed_(cfg, mapping, today) {
     );
     stats.updated++;
     console.log(
-      '[UPDATE] "' +
-        (effectiveEvt.summary || "(No title)") +
-        '" (' +
-        existing.id +
-        ", " +
+      "[UPDATE] " +
+        formatEventLogContext_(
+          effectiveEvt,
+          mapping.calendarId,
+          feedName,
+          "source event",
+        ) +
+        " — " +
         (changedFromLastFeedState
           ? "feed change detected"
-          : "destination event time drift detected") +
-        ")",
+          : "destination event time drift detected"),
     );
     if (destinationDeclined) {
       console.info(
-        '[DECLINE] Preserving local decline for "' +
-          (effectiveEvt.summary || "(No title)") +
-          '" and removing managed placeholders',
+        "[DECLINE] " +
+          formatEventLogContext_(
+            effectiveEvt,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — preserving local decline and removing managed placeholders",
       );
       maybeDeleteArrivalPlaceholder_(
         mapping,
@@ -703,21 +771,30 @@ function syncOneFeed_(cfg, mapping, today) {
       if (seen[syncKey]) return;
       const ev = existingByKey[syncKey];
       if (!isManagedEventForFeed_(ev, mapping.feedUrl, feedHash)) {
-        console.info("[SKIP] Not deleting non-managed event " + ev.id);
+        console.info(
+          "[SKIP] " +
+            formatEventLogContext_(
+              ev,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — missing from feed, but event is not managed by this feed",
+        );
         return;
       }
       if (isFutureEventResource_(ev, today)) {
-        calendarEventRemove_(mapping.calendarId, ev.id);
+        calendarEventRemove_(mapping.calendarId, ev.id, ev);
         stats.deleted++;
         console.log(
-          '[DELETE] Deleted feed-missing event "' +
-            (ev.summary || "(No title)") +
-            '" on ' +
-            eventStartDateForLog_(ev) +
-            " (" +
-            ev.id +
-            ") from " +
-            feedName,
+          "[DELETE] " +
+            formatEventLogContext_(
+              ev,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — missing from feed",
         );
       }
     });
@@ -727,18 +804,29 @@ function syncOneFeed_(cfg, mapping, today) {
       const driveEv = existingDriveByKey[driveSyncKey];
       if (!isManagedDriveEventForFeed_(driveEv, mapping.feedUrl, feedHash)) {
         console.info(
-          "[SKIP] Not deleting non-managed drive placeholder " + driveEv.id,
+          "[SKIP] " +
+            formatEventLogContext_(
+              driveEv,
+              mapping.calendarId,
+              feedName,
+              "drive placeholder",
+            ) +
+            " — missing from feed, but placeholder is not managed by this feed",
         );
         return;
       }
       if (isFutureEventResource_(driveEv, today)) {
-        calendarEventRemove_(mapping.calendarId, driveEv.id);
+        calendarEventRemove_(mapping.calendarId, driveEv.id, driveEv);
         stats.driveDeleted++;
         console.log(
-          "[DELETE] Deleted feed-missing drive placeholder " +
-            driveEv.id +
-            " from " +
-            feedName,
+          "[DELETE] " +
+            formatEventLogContext_(
+              driveEv,
+              mapping.calendarId,
+              feedName,
+              "drive placeholder",
+            ) +
+            " — missing from feed",
         );
       }
     });
@@ -750,18 +838,29 @@ function syncOneFeed_(cfg, mapping, today) {
         !isManagedArrivalEventForFeed_(arrivalEv, mapping.feedUrl, feedHash)
       ) {
         console.info(
-          "[SKIP] Not deleting non-managed arrival placeholder " + arrivalEv.id,
+          "[SKIP] " +
+            formatEventLogContext_(
+              arrivalEv,
+              mapping.calendarId,
+              feedName,
+              "arrival placeholder",
+            ) +
+            " — missing from feed, but placeholder is not managed by this feed",
         );
         return;
       }
       if (isFutureEventResource_(arrivalEv, today)) {
-        calendarEventRemove_(mapping.calendarId, arrivalEv.id);
+        calendarEventRemove_(mapping.calendarId, arrivalEv.id, arrivalEv);
         stats.arrivalDeleted++;
         console.log(
-          "[DELETE] Deleted feed-missing arrival placeholder " +
-            arrivalEv.id +
-            " from " +
-            feedName,
+          "[DELETE] " +
+            formatEventLogContext_(
+              arrivalEv,
+              mapping.calendarId,
+              feedName,
+              "arrival placeholder",
+            ) +
+            " — missing from feed",
         );
       }
     });
@@ -808,6 +907,48 @@ function eventStartDateForLog_(eventResource) {
   const start = eventResource && eventResource.start;
   const value = start && (start.date || start.dateTime);
   return value ? String(value).slice(0, 10) : "(Unknown date)";
+}
+
+/**
+ * Returns a consistent human-readable context for event-level logging.
+ */
+function formatEventLogContext_(
+  eventResource,
+  calendarId,
+  feedName,
+  eventKind,
+) {
+  const privateProps =
+    ((eventResource || {}).extendedProperties || {}).private || {};
+  const kind =
+    eventKind || managedEventKindForLog_(privateProps.managedKind || "source");
+  const title = (eventResource && eventResource.summary) || "(No title)";
+  const sourceName =
+    feedName ||
+    privateProps.sourceFeedName ||
+    privateProps.sourceUrl ||
+    "(Unknown feed)";
+  return (
+    kind +
+    ' "' +
+    title +
+    '" on ' +
+    eventStartDateForLog_(eventResource) +
+    " in " +
+    (calendarId || "(Unknown calendar)") +
+    " from " +
+    sourceName
+  );
+}
+
+function managedEventKindForLog_(managedKind) {
+  if (managedKind === "drive") return "drive placeholder";
+  if (managedKind === "arrival") return "arrival placeholder";
+  return "source event";
+}
+
+function mappingFeedName_(mapping) {
+  return (mapping && (mapping.name || mapping.feedUrl)) || "(Unknown feed)";
 }
 
 /**
@@ -984,11 +1125,7 @@ function withCalendarWriteRetry_(opName, context, fn) {
 
 function calendarEventInsert_(resource, calendarId, options) {
   const insertResource = ensureDeterministicCalendarEventId_(resource);
-  const context = buildCalendarWriteContext_(
-    insertResource,
-    calendarId,
-    insertResource.id,
-  );
+  const context = buildCalendarWriteContext_(insertResource, calendarId);
   return withCalendarWriteRetry_("insert", context, function () {
     try {
       return Calendar.Events.insert(insertResource, calendarId, options);
@@ -1022,6 +1159,7 @@ function recoverDeterministicCalendarEventInsert_(
     console.warn(
       "[CALENDAR_INSERT_RECOVERY_FAILED]" +
         formatCalendarWriteContext_(context) +
+        " reason=event lookup after duplicate insert failed" +
         " insertError=" +
         formatCalendarWriteLogValue_(String(insertError)) +
         " lookupError=" +
@@ -1045,36 +1183,31 @@ function recoverDeterministicCalendarEventInsert_(
     existingSyncKey === expectedSyncKey
   ) {
     console.warn(
-      "[CALENDAR_INSERT_RECOVERED] duplicate deterministic ID matched " +
-        "the managed event already stored by Calendar" +
-        formatCalendarWriteContext_(context),
+      "[CALENDAR_INSERT_RECOVERED]" +
+        formatCalendarWriteContext_(context) +
+        " reason=matching managed event was already stored by Calendar",
     );
     return existing;
   }
 
   throw new Error(
-    "Deterministic Calendar event ID conflict for " +
-      resource.id +
-      ": expected syncKey " +
-      expectedSyncKey +
-      ", found syncKey " +
-      existingSyncKey +
-      " with status " +
+    "Deterministic Calendar event ID conflict: stored event does not match " +
+      "the expected managed event (status " +
       (existingStatus || "unknown") +
-      ". Original insert error: " +
+      "). Original insert error: " +
       String(insertError),
   );
 }
 
 function calendarEventPatch_(resource, calendarId, eventId, options) {
-  const context = buildCalendarWriteContext_(resource, calendarId, eventId);
+  const context = buildCalendarWriteContext_(resource, calendarId);
   return withCalendarWriteRetry_("patch", context, function () {
     return Calendar.Events.patch(resource, calendarId, eventId, options);
   });
 }
 
-function calendarEventRemove_(calendarId, eventId) {
-  const context = buildCalendarWriteContext_(null, calendarId, eventId);
+function calendarEventRemove_(calendarId, eventId, resource) {
+  const context = buildCalendarWriteContext_(resource, calendarId);
   return withCalendarWriteRetry_("remove", context, function () {
     return Calendar.Events.remove(calendarId, eventId);
   });
@@ -1118,31 +1251,32 @@ function buildDeterministicCalendarEventId_(syncKey) {
 /**
  * Captures bounded, non-payload context needed to diagnose Calendar writes.
  */
-function buildCalendarWriteContext_(resource, calendarId, eventId) {
+function buildCalendarWriteContext_(resource, calendarId) {
   const privateProps =
     ((resource || {}).extendedProperties || {}).private || {};
   return {
     calendarId: calendarId || "",
-    eventId: eventId || (resource && resource.id) || "",
-    syncKey: privateProps.syncKey || "",
-    managedKind: privateProps.managedKind || "",
-    summary: (resource && resource.summary) || "",
+    eventKind: managedEventKindForLog_(privateProps.managedKind || "source"),
+    title: (resource && resource.summary) || "(No title)",
+    eventDate: eventStartDateForLog_(resource),
+    feedName:
+      privateProps.sourceFeedName || privateProps.sourceUrl || "(Unknown feed)",
   };
 }
 
 function formatCalendarWriteContext_(context) {
   const value = context || {};
   return (
+    " eventKind=" +
+    formatCalendarWriteLogValue_(value.eventKind) +
+    " title=" +
+    formatCalendarWriteLogValue_(value.title) +
+    " eventDate=" +
+    formatCalendarWriteLogValue_(value.eventDate) +
     " calendarId=" +
     formatCalendarWriteLogValue_(value.calendarId) +
-    " eventId=" +
-    formatCalendarWriteLogValue_(value.eventId) +
-    " syncKey=" +
-    formatCalendarWriteLogValue_(value.syncKey) +
-    " managedKind=" +
-    formatCalendarWriteLogValue_(value.managedKind) +
-    " summary=" +
-    formatCalendarWriteLogValue_(value.summary) +
+    " feedName=" +
+    formatCalendarWriteLogValue_(value.feedName) +
     " writeNumber=" +
     String(value.writeNumber || "") +
     " writesSucceeded=" +
@@ -1519,6 +1653,7 @@ function buildEventResource_(
   feedUrl,
   feedHash,
   syncKey,
+  feedName,
   attendees,
   fallbackTz,
 ) {
@@ -1540,6 +1675,7 @@ function buildEventResource_(
         managedKind: "source",
         sourceFeed: feedHash,
         sourceUrl: feedUrl,
+        sourceFeedName: feedName,
         sourceUid: evt.uid,
         syncKey: syncKey,
       },
@@ -1561,6 +1697,7 @@ function buildEventPatchResource_(
   feedUrl,
   feedHash,
   syncKey,
+  feedName,
   attendees,
   fallbackTz,
 ) {
@@ -1582,6 +1719,7 @@ function buildEventPatchResource_(
         managedKind: "source",
         sourceFeed: feedHash,
         sourceUrl: feedUrl,
+        sourceFeedName: feedName,
         sourceUid: evt.uid,
         syncKey: syncKey,
       },
@@ -1643,7 +1781,7 @@ function applyEventTitlePrefix_(evt, titlePrefix) {
 /**
  * Rewrites an event location to its configured canonical address when matched.
  */
-function applyPlaceNameAddressToEvent_(evt, rules) {
+function applyPlaceNameAddressToEvent_(evt, rules, mapping) {
   if (!evt || typeof evt !== "object") return evt;
   const locationResolution = resolvePlaceNameAddress_(
     evt.location || "",
@@ -1654,7 +1792,14 @@ function applyPlaceNameAddressToEvent_(evt, rules) {
   const copied = Object.assign({}, evt);
   copied.location = locationResolution.text;
   console.info(
-    '[INFO] Rewrote event location from "' +
+    "[INFO] " +
+      formatEventLogContext_(
+        copied,
+        mapping && mapping.calendarId,
+        mappingFeedName_(mapping),
+        "source event",
+      ) +
+      ' — rewrote location from "' +
       locationResolution.sourceText +
       '" to "' +
       locationResolution.text +
@@ -1817,17 +1962,19 @@ function cleanupRemovedFeedEvents_(cfg, today) {
           return;
         }
 
-        calendarEventRemove_(calendarId, ev.id);
+        calendarEventRemove_(calendarId, ev.id, ev);
         if (managedKind === "source") stats.sourceDeleted++;
         if (managedKind === "arrival") stats.arrivalDeleted++;
         if (managedKind === "drive") stats.driveDeleted++;
         console.log(
-          "[DELETE] Deleted removed-feed " +
-            managedKind +
-            " event " +
-            ev.id +
-            " from " +
-            calendarId,
+          "[DELETE] " +
+            formatEventLogContext_(
+              ev,
+              calendarId,
+              null,
+              managedEventKindForLog_(managedKind),
+            ) +
+            " — source feed is no longer configured",
         );
       });
     });
@@ -2015,6 +2162,10 @@ function resolveDuplicateBeforeCreate_(
   );
   let hasActivePeerDuplicate = false;
   let deleted = 0;
+  const createPrivateProps =
+    ((createResource || {}).extendedProperties || {}).private || {};
+  const createFeedName =
+    createPrivateProps.sourceFeedName || createPrivateProps.sourceUrl;
 
   duplicates.forEach(function (duplicate) {
     if (isActivePeerSourceEvent_(duplicate, activePeerFeedHashes)) {
@@ -2022,14 +2173,17 @@ function resolveDuplicateBeforeCreate_(
       return;
     }
 
-    calendarEventRemove_(calendarId, duplicate.id);
+    calendarEventRemove_(calendarId, duplicate.id, duplicate);
     deleted++;
     console.log(
-      '[DELETE] Deleted duplicate non-active event "' +
-        (duplicate.summary || "(No title)") +
-        '" (' +
-        duplicate.id +
-        ")",
+      "[DELETE] " +
+        formatEventLogContext_(
+          duplicate,
+          calendarId,
+          createFeedName,
+          "source event",
+        ) +
+        " — duplicate non-active event",
     );
   });
 
@@ -2285,7 +2439,7 @@ function parseTimeZoneOffsetMinutes_(offsetText) {
 /**
  * Loads existing calendar events previously managed by this feed, keyed by syncKey.
  */
-function loadExistingEventsByKey_(calendarId, feedHash) {
+function loadExistingEventsByKey_(calendarId, feedHash, feedName) {
   const out = {};
   const duplicates = [];
   let pageToken;
@@ -2321,13 +2475,16 @@ function loadExistingEventsByKey_(calendarId, feedHash) {
   } while (pageToken);
 
   duplicates.forEach(function (duplicate) {
-    calendarEventRemove_(calendarId, duplicate.id);
+    calendarEventRemove_(calendarId, duplicate.id, duplicate);
     console.log(
-      '[DELETE] Deleted duplicate managed event "' +
-        (duplicate.summary || "(No title)") +
-        '" (' +
-        duplicate.id +
-        ")",
+      "[DELETE] " +
+        formatEventLogContext_(
+          duplicate,
+          calendarId,
+          feedName,
+          "source event",
+        ) +
+        " — duplicate managed sync key",
     );
   });
 
@@ -2383,14 +2540,30 @@ function reconcileArrivalPlaceholder_(
   if (!isEventStartOnOrAfterCutoff_(evt, today)) {
     stats.arrivalSkipped++;
     console.info(
-      "[SKIP] Arrival placeholder ignored for source event in the past",
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — arrival placeholder ignored because source event is before the sync cutoff",
     );
     return null;
   }
 
   if (isAllDayEvent_(evt)) {
     stats.arrivalSkipped++;
-    console.info("[SKIP] Arrival placeholder ignored for all-day source event");
+    console.info(
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — arrival placeholder ignored because source event is all-day",
+    );
     maybeDeleteArrivalPlaceholder_(
       mapping,
       feedHash,
@@ -2422,7 +2595,14 @@ function reconcileArrivalPlaceholder_(
   if (!sourceStart) {
     stats.arrivalSkipped++;
     console.info(
-      "[SKIP] Arrival placeholder ignored because source start time is unavailable",
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — arrival placeholder ignored because source start time is unavailable",
     );
     maybeDeleteArrivalPlaceholder_(
       mapping,
@@ -2484,11 +2664,14 @@ function reconcileArrivalPlaceholder_(
     });
     stats.arrivalCreated++;
     console.log(
-      '[CREATE] Arrival placeholder for "' +
-        (evt.summary || "(No title)") +
-        '" (' +
-        syncedEvent.id +
-        ")",
+      "[CREATE] " +
+        formatEventLogContext_(
+          arrivalResource,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "arrival placeholder",
+        ) +
+        " — source event requests an advanced arrival",
     );
     return arrivalStart;
   }
@@ -2498,18 +2681,28 @@ function reconcileArrivalPlaceholder_(
   ) {
     stats.arrivalSkipped++;
     console.info(
-      "[SKIP] Not updating unmanaged arrival placeholder " + existingArrival.id,
+      "[SKIP] " +
+        formatEventLogContext_(
+          existingArrival,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "arrival placeholder",
+        ) +
+        " — placeholder is not managed by this feed",
     );
     return null;
   }
 
   if (existingArrivalHash === arrivalHash) {
     console.log(
-      '[UNCHANGED] Arrival placeholder for "' +
-        (evt.summary || "(No title)") +
-        '" (' +
-        existingArrival.id +
-        ")",
+      "[UNCHANGED] " +
+        formatEventLogContext_(
+          existingArrival,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "arrival placeholder",
+        ) +
+        " — no feed changes detected",
     );
     return arrivalStart;
   }
@@ -2519,11 +2712,14 @@ function reconcileArrivalPlaceholder_(
   });
   stats.arrivalUpdated++;
   console.log(
-    '[UPDATE] Arrival placeholder for "' +
-      (evt.summary || "(No title)") +
-      '" (' +
-      existingArrival.id +
-      ", feed change detected)",
+    "[UPDATE] " +
+      formatEventLogContext_(
+        arrivalResource,
+        mapping.calendarId,
+        mappingFeedName_(mapping),
+        "arrival placeholder",
+      ) +
+      " — feed change detected",
   );
   return arrivalStart;
 }
@@ -2579,9 +2775,14 @@ function reconcileDrivePlaceholder_(
   if (!destinationCandidate.text) {
     stats.driveSkipped++;
     console.info(
-      '[SKIP] Drive placeholder ignored because "' +
-        sourceTitle +
-        '" has no location',
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — drive placeholder ignored because source event has no location",
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -2595,9 +2796,14 @@ function reconcileDrivePlaceholder_(
     return;
   }
   console.info(
-    '[INFO] Using event location as drive destination candidate for "' +
-      sourceTitle +
-      '"',
+    "[INFO] " +
+      formatEventLogContext_(
+        evt,
+        mapping.calendarId,
+        mappingFeedName_(mapping),
+        "source event",
+      ) +
+      " — using event location as drive destination candidate",
   );
   const destination = destinationCandidate.text;
   const existingDrive = existingDriveByKey[driveSyncKey] || null;
@@ -2619,9 +2825,14 @@ function reconcileDrivePlaceholder_(
   if (!isEventStartOnOrAfterCutoff_(evt, today)) {
     stats.driveSkipped++;
     console.info(
-      '[SKIP] Drive placeholder ignored for event in the past "' +
-        sourceTitle +
-        '"',
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — drive placeholder ignored because source event is before the sync cutoff",
     );
     return;
   }
@@ -2629,9 +2840,14 @@ function reconcileDrivePlaceholder_(
   if (isAllDayEvent_(evt)) {
     stats.driveSkipped++;
     console.info(
-      '[SKIP] Drive placeholder ignored for all-day event "' +
-        sourceTitle +
-        '"',
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — drive placeholder ignored because source event is all-day",
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -2649,7 +2865,14 @@ function reconcileDrivePlaceholder_(
   if (!sourceStart) {
     stats.driveSkipped++;
     console.info(
-      "[SKIP] Drive placeholder ignored because source start time is unavailable",
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — drive placeholder ignored because source start time is unavailable",
     );
     maybeDeleteDrivePlaceholder_(
       mapping,
@@ -2681,9 +2904,14 @@ function reconcileDrivePlaceholder_(
     stats.driveSkipped++;
     if (drivePlan.routeLookupFailed) {
       console.warn(
-        '[WARN] Could not compute drive time for "' +
-          sourceTitle +
-          '" (destination: ' +
+        "[WARN] " +
+          formatEventLogContext_(
+            evt,
+            mapping.calendarId,
+            mappingFeedName_(mapping),
+            "source event",
+          ) +
+          " — could not compute drive time (destination: " +
           destination +
           ")" +
           (drivePlan.lookupFailures && drivePlan.lookupFailures.length
@@ -2692,9 +2920,14 @@ function reconcileDrivePlaceholder_(
       );
     }
     console.info(
-      '[SKIP] Drive placeholder ignored for "' +
-        sourceTitle +
-        '" because ' +
+      "[SKIP] " +
+        formatEventLogContext_(
+          evt,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "source event",
+        ) +
+        " — drive placeholder ignored because " +
         drivePlan.skipReason,
     );
     maybeDeleteDrivePlaceholder_(
@@ -2763,11 +2996,14 @@ function reconcileDrivePlaceholder_(
     });
     stats.driveCreated++;
     console.log(
-      '[CREATE] Drive placeholder for "' +
-        sourceTitle +
-        '" (' +
-        syncedEvent.id +
-        ")",
+      "[CREATE] " +
+        formatEventLogContext_(
+          driveResource,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "drive placeholder",
+        ) +
+        " — drive time exceeds the configured threshold",
     );
     return;
   }
@@ -2775,22 +3011,28 @@ function reconcileDrivePlaceholder_(
   if (!isManagedDriveEventForFeed_(existingDrive, mapping.feedUrl, feedHash)) {
     stats.driveSkipped++;
     console.info(
-      '[SKIP] Not updating unmanaged drive placeholder "' +
-        (existingDrive.summary || "(No title)") +
-        '" (' +
-        existingDrive.id +
-        ")",
+      "[SKIP] " +
+        formatEventLogContext_(
+          existingDrive,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "drive placeholder",
+        ) +
+        " — placeholder is not managed by this feed",
     );
     return;
   }
 
   if (existingDriveHash === driveHash) {
     console.log(
-      '[UNCHANGED] Drive placeholder for "' +
-        sourceTitle +
-        '" (' +
-        existingDrive.id +
-        ")",
+      "[UNCHANGED] " +
+        formatEventLogContext_(
+          existingDrive,
+          mapping.calendarId,
+          mappingFeedName_(mapping),
+          "drive placeholder",
+        ) +
+        " — no feed changes detected",
     );
     return;
   }
@@ -2800,11 +3042,14 @@ function reconcileDrivePlaceholder_(
   });
   stats.driveUpdated++;
   console.log(
-    '[UPDATE] Drive placeholder for "' +
-      sourceTitle +
-      '" (' +
-      existingDrive.id +
-      ", feed change detected)",
+    "[UPDATE] " +
+      formatEventLogContext_(
+        driveResource,
+        mapping.calendarId,
+        mappingFeedName_(mapping),
+        "drive placeholder",
+      ) +
+      " — feed change detected",
   );
 }
 
@@ -2826,17 +3071,19 @@ function maybeDeleteDrivePlaceholder_(
     return;
   if (!isFutureEventResource_(existingDrive, today)) return;
 
-  calendarEventRemove_(mapping.calendarId, existingDrive.id);
+  calendarEventRemove_(mapping.calendarId, existingDrive.id, existingDrive);
   delete existingDriveByKey[driveSyncKey];
   stats.driveDeleted++;
   console.log(
-    '[DELETE] Drive placeholder "' +
-      (existingDrive.summary || "(No title)") +
-      '" (' +
-      existingDrive.id +
-      ", " +
-      reason +
-      ")",
+    "[DELETE] " +
+      formatEventLogContext_(
+        existingDrive,
+        mapping.calendarId,
+        mappingFeedName_(mapping),
+        "drive placeholder",
+      ) +
+      " — " +
+      reason,
   );
 }
 
@@ -2860,17 +3107,19 @@ function maybeDeleteArrivalPlaceholder_(
     return;
   if (!isFutureEventResource_(existingArrival, today)) return;
 
-  calendarEventRemove_(mapping.calendarId, existingArrival.id);
+  calendarEventRemove_(mapping.calendarId, existingArrival.id, existingArrival);
   delete existingArrivalByKey[arrivalSyncKey];
   stats.arrivalDeleted++;
   console.log(
-    '[DELETE] Arrival placeholder "' +
-      (existingArrival.summary || "(No title)") +
-      '" (' +
-      existingArrival.id +
-      ", " +
-      reason +
-      ")",
+    "[DELETE] " +
+      formatEventLogContext_(
+        existingArrival,
+        mapping.calendarId,
+        mappingFeedName_(mapping),
+        "arrival placeholder",
+      ) +
+      " — " +
+      reason,
   );
 }
 
@@ -3490,6 +3739,7 @@ function buildDrivePlaceholderResource_(
         managedKind: "drive",
         sourceFeed: feedHash,
         sourceUrl: mapping.feedUrl,
+        sourceFeedName: mappingFeedName_(mapping),
         sourceUid: evt.uid,
         syncKey: driveSyncKey,
         sourceSyncKey: sourceSyncKey,
@@ -3569,6 +3819,7 @@ function buildArrivalPlaceholderResource_(
         managedKind: "arrival",
         sourceFeed: feedHash,
         sourceUrl: mapping.feedUrl,
+        sourceFeedName: mappingFeedName_(mapping),
         sourceUid: evt.uid,
         syncKey: arrivalSyncKey,
         sourceSyncKey: sourceSyncKey,

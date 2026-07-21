@@ -137,7 +137,8 @@ To use interval scheduling instead, omit `triggerHours` and set `triggerEveryMin
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
 - Every managed insert uses a deterministic Google Calendar event ID derived from its `syncKey`, preventing a retried insert from creating a second API event with a different ID.
 - A duplicate deterministic ID is treated as a successful insert only when the existing, non-cancelled Calendar event has the expected `syncKey`; mismatches fail instead of silently adopting an unrelated event.
-- Calendar write retries and terminal failures use `[CALENDAR_WRITE_RETRY]` and `[CALENDAR_WRITE_FAILED]` logs. Recovered deterministic inserts use `[CALENDAR_INSERT_RECOVERED]`. These include the error class, operation, retry attempt/delay, calendar and event IDs, sync key, managed kind, title, and the number of writes started/succeeded in that execution.
+- Event-level logs consistently include the event kind, title, date, target calendar ID, source feed name, and action reason. They intentionally omit Google Calendar event IDs and internal sync keys.
+- Calendar write retries and terminal failures use `[CALENDAR_WRITE_RETRY]` and `[CALENDAR_WRITE_FAILED]` logs. Recovered deterministic inserts use `[CALENDAR_INSERT_RECOVERED]`. These preserve the error class, operation, retry attempt/delay, standardized event context, and the number of writes started/succeeded in that execution.
 - `Calendar usage limits exceeded` fails immediately without short-delay retries and aborts later feed writes and removed-feed cleanup for that execution. Ordinary short-term rate errors continue using exponential backoff.
 - Delete operations are guarded to only remove events that are verifiably managed by this script/feed.
 - On first `syncIcalFeeds()` run, the script logs all accessible calendar names/IDs once, to help with initial config.

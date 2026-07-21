@@ -1116,9 +1116,11 @@ test("calendarEventInsert_ fails fast on Calendar usage limits", () => {
       ctx.calendarEventInsert_(
         {
           summary: "Practice",
+          start: { dateTime: "2099-05-01T15:00:00Z" },
           extendedProperties: {
             private: {
               managedKind: "source",
+              sourceFeedName: "Practice Feed",
               syncKey: "feedhash:practice-1",
             },
           },
@@ -1138,10 +1140,11 @@ test("calendarEventInsert_ fails fast on Calendar usage limits", () => {
   assert.match(errors[0], /attempt=1\/5/);
   assert.match(errors[0], /retryable=false/);
   assert.match(errors[0], /calendarId="calendar-1"/);
-  assert.match(errors[0], /eventId="[0-9a-f]{64}"/);
-  assert.match(errors[0], /syncKey="feedhash:practice-1"/);
-  assert.match(errors[0], /managedKind="source"/);
-  assert.match(errors[0], /summary="Practice"/);
+  assert.match(errors[0], /eventKind="source event"/);
+  assert.match(errors[0], /title="Practice"/);
+  assert.match(errors[0], /eventDate="2099-05-01"/);
+  assert.match(errors[0], /feedName="Practice Feed"/);
+  assert.doesNotMatch(errors[0], /eventId=|syncKey=/);
   assert.match(errors[0], /writeNumber=1/);
   assert.match(errors[0], /writesSucceeded=0/);
 });
@@ -1149,8 +1152,10 @@ test("calendarEventInsert_ fails fast on Calendar usage limits", () => {
 test("calendarEventInsert_ logs terminal rate-limit diagnostics", () => {
   const ctx = loadIcalSyncContext();
   const errors = [];
+  const warnings = [];
   let attempts = 0;
   ctx.console.error = (msg) => errors.push(String(msg));
+  ctx.console.warn = (msg) => warnings.push(String(msg));
   ctx.Utilities.sleep = () => {};
   ctx.Calendar.Events.insert = () => {
     attempts++;
@@ -1162,9 +1167,11 @@ test("calendarEventInsert_ logs terminal rate-limit diagnostics", () => {
       ctx.calendarEventInsert_(
         {
           summary: "Practice",
+          start: { dateTime: "2099-05-01T15:00:00Z" },
           extendedProperties: {
             private: {
               managedKind: "source",
+              sourceFeedName: "Practice Feed",
               syncKey: "feedhash:practice-1",
             },
           },
@@ -1177,13 +1184,29 @@ test("calendarEventInsert_ logs terminal rate-limit diagnostics", () => {
 
   assert.equal(attempts, 5);
   assert.equal(errors.length, 1);
+  assert.equal(warnings.length, 4);
+  assert.match(warnings[0], /\[CALENDAR_WRITE_RETRY\] op=insert/);
+  assert.match(warnings[0], /errorType=rate_limit/);
+  assert.match(warnings[0], /attempt=1\/5/);
+  assert.match(warnings[0], /nextDelayMs=\d+/);
+  assert.match(warnings[0], /eventKind="source event"/);
+  assert.match(warnings[0], /title="Practice"/);
+  assert.match(warnings[0], /eventDate="2099-05-01"/);
+  assert.match(warnings[0], /calendarId="calendar-1"/);
+  assert.match(warnings[0], /feedName="Practice Feed"/);
+  assert.match(warnings[0], /error="Error: Rate Limit Exceeded"/);
+  assert.doesNotMatch(warnings[0], /eventId=|syncKey=/);
   assert.match(errors[0], /\[CALENDAR_WRITE_FAILED\] op=insert/);
   assert.match(errors[0], /errorType=rate_limit/);
   assert.match(errors[0], /attempt=5\/5/);
   assert.match(errors[0], /retryable=true/);
   assert.match(errors[0], /writeNumber=1/);
   assert.match(errors[0], /writesSucceeded=0/);
-  assert.match(errors[0], /syncKey="feedhash:practice-1"/);
+  assert.match(errors[0], /eventKind="source event"/);
+  assert.match(errors[0], /title="Practice"/);
+  assert.match(errors[0], /eventDate="2099-05-01"/);
+  assert.match(errors[0], /feedName="Practice Feed"/);
+  assert.doesNotMatch(errors[0], /eventId=|syncKey=/);
 });
 
 test("calendarEventInsert_ enforces deterministic Calendar event IDs", () => {
@@ -1273,9 +1296,11 @@ test("calendarEventInsert_ recovers a matching deterministic ID conflict", () =>
   const result = ctx.calendarEventInsert_(
     {
       summary: "Practice",
+      start: { dateTime: "2099-05-01T15:00:00Z" },
       extendedProperties: {
         private: {
           managedKind: "source",
+          sourceFeedName: "Practice Feed",
           syncKey,
         },
       },
@@ -1289,8 +1314,11 @@ test("calendarEventInsert_ recovers a matching deterministic ID conflict", () =>
   assert.equal(errors.length, 0);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /\[CALENDAR_INSERT_RECOVERED\]/);
-  assert.match(warnings[0], /eventId="[0-9a-f]{64}"/);
-  assert.match(warnings[0], /syncKey="feedhash:uid-1"/);
+  assert.match(warnings[0], /eventKind="source event"/);
+  assert.match(warnings[0], /title="Practice"/);
+  assert.match(warnings[0], /eventDate="2099-05-01"/);
+  assert.match(warnings[0], /feedName="Practice Feed"/);
+  assert.doesNotMatch(warnings[0], /eventId=|syncKey=/);
   assert.match(warnings[0], /writesSucceeded=0/);
 });
 
@@ -1788,7 +1816,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
   const driveStart = new Date("2099-05-01T14:35:00Z");
   const driveEnd = new Date("2099-05-01T15:00:00Z");
   const resource = ctx.buildDrivePlaceholderResource_(
-    { feedUrl: "https://example.com/feed.ics" },
+    { name: "Practice Feed", feedUrl: "https://example.com/feed.ics" },
     "feedhash123",
     { uid: "uid-1", location: "Destination" },
     "feedhash123:source-sync",
@@ -1806,6 +1834,7 @@ test("drive placeholder resource carries source linkage metadata", () => {
 
   const p = resource.extendedProperties.private;
   assert.equal(p.managedKind, "drive");
+  assert.equal(p.sourceFeedName, "Practice Feed");
   assert.equal(p.sourceSyncKey, "feedhash123:source-sync");
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.syncKey, "drive:feedhash123:source-sync");
@@ -1833,7 +1862,7 @@ test("arrival placeholder resource carries source linkage metadata", () => {
   const arrivalStart = new Date("2099-05-01T15:00:00Z");
   const arrivalEnd = new Date("2099-05-01T15:30:00Z");
   const resource = ctx.buildArrivalPlaceholderResource_(
-    { feedUrl: "https://example.com/feed.ics" },
+    { name: "Practice Feed", feedUrl: "https://example.com/feed.ics" },
     "feedhash123",
     { uid: "uid-1", location: "Destination" },
     "feedhash123:source-sync",
@@ -1850,6 +1879,7 @@ test("arrival placeholder resource carries source linkage metadata", () => {
 
   const p = resource.extendedProperties.private;
   assert.equal(p.managedKind, "arrival");
+  assert.equal(p.sourceFeedName, "Practice Feed");
   assert.equal(p.sourceSyncKey, "feedhash123:source-sync");
   assert.equal(p.sourceEventId, "source-event-123");
   assert.equal(p.arrivalMinutes, "30");
@@ -2090,8 +2120,9 @@ test("syncOneFeed_ logs the event title when create insert fails", () => {
   assert.ok(
     errors.some(
       (msg) =>
-        msg.includes('[ERROR] Failed creating event "Practice"') &&
-        msg.includes("insert failed"),
+        msg.includes(
+          '[ERROR] source event "Practice" on 2099-05-01 in calendar-1 from Practice Feed — create failed:',
+        ) && msg.includes("insert failed"),
     ),
   );
 });
@@ -2751,11 +2782,13 @@ test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   assert.ok(source);
   assert.ok(drive);
   assert.equal(source.summary, "[Sports] Client Meeting");
+  assert.equal(source.extendedProperties.private.sourceFeedName, "Test Feed");
   assert.equal(
     JSON.stringify(source.attendees),
     JSON.stringify([{ email: "b@example.com" }]),
   );
   assert.equal(drive.summary, "Drive (25m) to [Sports] Client Meeting");
+  assert.equal(drive.extendedProperties.private.sourceFeedName, "Test Feed");
   assert.equal(
     drive.extendedProperties.private.sourceEventId,
     "source-created-1",
@@ -3382,7 +3415,7 @@ test("syncOneFeed_ deletes managed future events missing from feed", () => {
   assert.deepEqual(removed.sort(), ["arrival-1", "drive-1", "source-1"]);
   assert.ok(
     logs.includes(
-      '[DELETE] Deleted feed-missing event "Missing Soccer Game" on 2099-05-01 (source-1) from Sports Feed',
+      '[DELETE] source event "Missing Soccer Game" on 2099-05-01 in calendar-1 from Sports Feed — missing from feed',
     ),
   );
 });
@@ -3395,4 +3428,24 @@ test("eventStartDateForLog_ supports all-day and missing starts", () => {
     "2099-05-02",
   );
   assert.equal(ctx.eventStartDateForLog_({}), "(Unknown date)");
+});
+
+test("formatEventLogContext_ standardizes event metadata without IDs", () => {
+  const ctx = loadIcalSyncContext();
+  const context = ctx.formatEventLogContext_(
+    {
+      id: "event-id-not-for-logs",
+      summary: "Soccer Game",
+      start: { dateTime: "2099-05-03T18:00:00-07:00" },
+    },
+    "calendar-1",
+    "Sports Feed",
+    "source event",
+  );
+
+  assert.equal(
+    context,
+    'source event "Soccer Game" on 2099-05-03 in calendar-1 from Sports Feed',
+  );
+  assert.doesNotMatch(context, /event-id-not-for-logs/);
 });
