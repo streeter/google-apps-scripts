@@ -319,7 +319,7 @@ test("getIcalSyncConfig_ defaults per-feed timeZone to empty", () => {
   assert.equal(cfg.feedMappings[0].timeZone, "");
 });
 
-test("getIcalSyncConfig_ defaults triggerHours to empty array", () => {
+test("getIcalSyncConfig_ leaves triggerHours unset for interval scheduling", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
     feedMappings: [
@@ -329,7 +329,7 @@ test("getIcalSyncConfig_ defaults triggerHours to empty array", () => {
 
   const cfg = ctx.getIcalSyncConfig_();
 
-  assert.equal(JSON.stringify(cfg.triggerHours), JSON.stringify([]));
+  assert.equal(cfg.triggerHours, undefined);
 });
 
 test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
@@ -367,6 +367,12 @@ test("normalizeTriggerHours_ sorts and de-duplicates hours", () => {
   const hours = ctx.normalizeTriggerHours_([22, 6, 8, 6, 20]);
 
   assert.equal(JSON.stringify(hours), JSON.stringify([6, 8, 20, 22]));
+});
+
+test("normalizeTriggerHours_ allows an empty array", () => {
+  const ctx = loadIcalSyncContext();
+
+  assert.equal(JSON.stringify(ctx.normalizeTriggerHours_([])), "[]");
 });
 
 test("setupIcalFeedSyncTrigger uses hourly trigger when triggerEveryMinutes is 60", () => {
@@ -408,6 +414,29 @@ test("setupIcalFeedSyncTrigger uses explicit scheduled hours when configured", (
     { hour: 20, minute: 0, everyDays: 1 },
     { hour: 22, minute: 0, everyDays: 1 },
   ]);
+});
+
+test("setupIcalFeedSyncTrigger removes triggers for explicit empty triggerHours", () => {
+  const ctx = loadIcalSyncContext();
+  const syncTrigger = { getHandlerFunction: () => "syncIcalFeeds" };
+  const otherTrigger = { getHandlerFunction: () => "anotherFunction" };
+  const deleted = [];
+  ctx.getIcalSyncConfig = () => ({
+    triggerHours: [],
+    triggerEveryMinutes: 60,
+    feedMappings: [
+      { feedUrl: "https://example.com/a.ics", calendarId: "cal1" },
+    ],
+  });
+  ctx.ScriptApp.getProjectTriggers = () => [syncTrigger, otherTrigger];
+  ctx.ScriptApp.deleteTrigger = (trigger) => deleted.push(trigger);
+  ctx.ScriptApp.newTrigger = () => {
+    throw new Error("should not create a replacement trigger");
+  };
+
+  ctx.setupIcalFeedSyncTrigger();
+
+  assert.deepEqual(deleted, [syncTrigger]);
 });
 
 test("syncIcalFeeds processes all feeds and throws a summary error at the end", () => {

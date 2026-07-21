@@ -26,7 +26,8 @@ const CALENDAR_WRITE_DIAGNOSTICS = {
 };
 
 /**
- * Creates (or recreates) the periodic time-based trigger for the main sync function.
+ * Replaces the time-based triggers for the main sync function.
+ * An explicitly empty triggerHours array removes all sync triggers.
  */
 function setupIcalFeedSyncTrigger() {
   const cfg = getIcalSyncConfig_();
@@ -39,8 +40,10 @@ function setupIcalFeedSyncTrigger() {
       ScriptApp.deleteTrigger(t);
     });
 
-  if (cfg.triggerHours && cfg.triggerHours.length) {
-    createDailyHourTriggers_(fn, cfg.triggerHours);
+  if (Array.isArray(cfg.triggerHours)) {
+    if (cfg.triggerHours.length) {
+      createDailyHourTriggers_(fn, cfg.triggerHours);
+    }
     return;
   }
 
@@ -105,8 +108,8 @@ function createDailyHourTriggers_(handlerFunction, triggerHours) {
  * Validates, de-duplicates, and sorts configured trigger hours.
  */
 function normalizeTriggerHours_(triggerHours) {
-  if (!Array.isArray(triggerHours) || !triggerHours.length) {
-    throw new Error("triggerHours must be a non-empty array when provided.");
+  if (!Array.isArray(triggerHours)) {
+    throw new Error("triggerHours must be an array when provided.");
   }
 
   const seen = {};
@@ -806,9 +809,7 @@ function getIcalSyncConfig_() {
     throw new Error("getIcalSyncConfig() must return a config object.");
   }
   if (!cfg.triggerEveryMinutes) cfg.triggerEveryMinutes = 15;
-  if (typeof cfg.triggerHours === "undefined" || cfg.triggerHours === null) {
-    cfg.triggerHours = [];
-  } else {
+  if (typeof cfg.triggerHours !== "undefined" && cfg.triggerHours !== null) {
     cfg.triggerHours = normalizeTriggerHours_(cfg.triggerHours);
   }
   if (typeof cfg.deleteMissingFromFeed !== "boolean")

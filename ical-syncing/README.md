@@ -112,14 +112,14 @@ function getIcalSyncConfig() {
 }
 ```
 
-`triggerHours` is an optional array of daily run hours in the Apps Script project timezone. This project is set to `America/Los_Angeles`, so `triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22]` runs at 6am, every 2 hours during the day, and 10pm Pacific.
+`triggerHours` is an optional array of daily run hours in the Apps Script project timezone. This project is set to `America/Los_Angeles`, so `triggerHours: [6, 8, 10, 12, 14, 16, 18, 20, 22]` runs at 6am, every 2 hours during the day, and 10pm Pacific. Set `triggerHours: []` and run `setupIcalFeedSyncTrigger()` to remove every sync trigger without creating replacements.
 
-`triggerEveryMinutes` remains available as a fallback when `triggerHours` is empty. It supports `1`, `5`, `10`, `15`, `30`, and multiples of `60` (for example `60` hourly, `120` every 2 hours, `1440` daily).
+To use interval scheduling instead, omit `triggerHours` and set `triggerEveryMinutes`. It supports `1`, `5`, `10`, `15`, `30`, and multiples of `60` (for example `60` hourly, `120` every 2 hours, `1440` daily).
 
 ## Notes
 
 - `feedMappings` can include many feed -> calendar routes.
-- `triggerHours` takes precedence over `triggerEveryMinutes` when non-empty.
+- A configured `triggerHours` array takes precedence over `triggerEveryMinutes`, including an empty array that disables all sync triggers.
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
 - Per-feed `timeZone` is the fallback for floating `DTSTART`/`DTEND` values when the feed does not declare a timezone. If omitted, the Apps Script project timezone is used.
 - Per-feed `skipAllDayEvents` filters out all-day source events for that feed when set to `true`. Default: `false`.
