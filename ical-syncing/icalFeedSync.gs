@@ -297,6 +297,13 @@ function syncOneFeed_(cfg, mapping, today) {
 
   const icsText = fetchIcs_(mapping.feedUrl);
   const parsed = parseIcs_(icsText, mapping.timeZone);
+  const activeSourceSyncKeys = {};
+  parsed.events.forEach(function (evt) {
+    if (evt.cancelled) return;
+    activeSourceSyncKeys[
+      buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey)
+    ] = true;
+  });
   const existingByKey = loadExistingEventsByKey_(
     mapping.calendarId,
     feedHash,
@@ -378,7 +385,7 @@ function syncOneFeed_(cfg, mapping, today) {
     const arrivalSyncKey = buildArrivalSyncKey_(syncKey);
     const driveSyncKey = buildDriveSyncKey_(syncKey);
     seen[syncKey] = true;
-    const existing = existingByKey[syncKey];
+    let existing = existingByKey[syncKey];
 
     if (evt.cancelled) {
       if (!isEventOnOrAfterCutoff_(evt, today)) {
@@ -479,84 +486,121 @@ function syncOneFeed_(cfg, mapping, today) {
         mapping.calendarId,
         createResource,
         activePeerFeedHashes,
+        activeSourceSyncKeys,
       );
       if (duplicateResolution.deleted)
         stats.deleted += duplicateResolution.deleted;
-      if (duplicateResolution.skipCreate) {
-        stats.skipped++;
+      if (duplicateResolution.adoptExisting) {
+        existing = duplicateResolution.adoptExisting;
+        const existingPrivateProps =
+          ((existing || {}).extendedProperties || {}).private || {};
+        const previousSyncKey = existingPrivateProps.syncKey || "";
+        reindexExistingManagedEvent_(
+          existingByKey,
+          previousSyncKey,
+          syncKey,
+          existing,
+        );
+        reindexExistingManagedEvent_(
+          existingArrivalByKey,
+          buildArrivalSyncKey_(previousSyncKey),
+          arrivalSyncKey,
+        );
+        reindexExistingManagedEvent_(
+          existingDriveByKey,
+          buildDriveSyncKey_(previousSyncKey),
+          driveSyncKey,
+        );
         console.info(
-          "[SKIP] " +
+          "[ADOPT] " +
             formatEventLogContext_(
               effectiveEvt,
               mapping.calendarId,
               feedName,
               "source event",
             ) +
-            " — actively synced peer event already exists",
+            " — adopting exact same-feed event after " +
+            (existingPrivateProps.sourceUid !== evt.uid
+              ? "upstream UID changed"
+              : "upstream recurrence identity changed"),
+        );
+      } else {
+        if (duplicateResolution.skipCreate) {
+          stats.skipped++;
+          console.info(
+            "[SKIP] " +
+              formatEventLogContext_(
+                effectiveEvt,
+                mapping.calendarId,
+                feedName,
+                "source event",
+              ) +
+              " — actively synced peer event already exists",
+          );
+          return;
+        }
+
+        let inserted;
+        try {
+          inserted = calendarEventInsert_(createResource, mapping.calendarId, {
+            sendUpdates: "none",
+          });
+        } catch (e) {
+          console.error(
+            "[ERROR] " +
+              formatEventLogContext_(
+                effectiveEvt,
+                mapping.calendarId,
+                feedName,
+                "source event",
+              ) +
+              " — create failed: " +
+              String(e),
+          );
+          throw e;
+        }
+        stats.created++;
+        console.log(
+          "[CREATE] " +
+            formatEventLogContext_(
+              effectiveEvt,
+              mapping.calendarId,
+              feedName,
+              "source event",
+            ) +
+            " — new feed event",
+        );
+        const arrivalAnchorStart = reconcileArrivalPlaceholder_(
+          effectiveEvt,
+          inserted,
+          mapping,
+          feedHash,
+          syncKey,
+          arrivalSyncKey,
+          existingArrivalByKey,
+          seenArrival,
+          today,
+          stats,
+          sourceAttendees,
+        );
+        reconcileDrivePlaceholder_(
+          effectiveEvt,
+          inserted,
+          mapping,
+          feedHash,
+          syncKey,
+          driveSyncKey,
+          driveOpts,
+          existingDriveByKey,
+          seenDrive,
+          today,
+          stats,
+          driveDurationCache,
+          arrivalAnchorStart,
+          sourceAttendees,
         );
         return;
       }
-
-      let inserted;
-      try {
-        inserted = calendarEventInsert_(createResource, mapping.calendarId, {
-          sendUpdates: "none",
-        });
-      } catch (e) {
-        console.error(
-          "[ERROR] " +
-            formatEventLogContext_(
-              effectiveEvt,
-              mapping.calendarId,
-              feedName,
-              "source event",
-            ) +
-            " — create failed: " +
-            String(e),
-        );
-        throw e;
-      }
-      stats.created++;
-      console.log(
-        "[CREATE] " +
-          formatEventLogContext_(
-            effectiveEvt,
-            mapping.calendarId,
-            feedName,
-            "source event",
-          ) +
-          " — new feed event",
-      );
-      const arrivalAnchorStart = reconcileArrivalPlaceholder_(
-        effectiveEvt,
-        inserted,
-        mapping,
-        feedHash,
-        syncKey,
-        arrivalSyncKey,
-        existingArrivalByKey,
-        seenArrival,
-        today,
-        stats,
-        sourceAttendees,
-      );
-      reconcileDrivePlaceholder_(
-        effectiveEvt,
-        inserted,
-        mapping,
-        feedHash,
-        syncKey,
-        driveSyncKey,
-        driveOpts,
-        existingDriveByKey,
-        seenDrive,
-        today,
-        stats,
-        driveDurationCache,
-        arrivalAnchorStart,
-        sourceAttendees,
-      );
-      return;
     }
 
     if (!isManagedEventForFeed_(existing, mapping.feedUrl, feedHash)) {
@@ -2148,19 +2192,24 @@ function isRemovedFeedManagedEvent_(ev, managedKind, activeFeeds) {
 
 /**
  * Handles exact duplicate events before creating a new managed source event.
- * If a duplicate is managed by another active feed on this calendar, skip this create.
- * Otherwise remove duplicate non-active events and allow the managed create to proceed.
+ * If a duplicate is already managed by this feed and its old identity is absent from
+ * the current feed, adopt it so an upstream identity change can be patched in place.
+ * Preserve active same-feed identities. If another active feed manages the duplicate,
+ * skip this create. Otherwise remove duplicate non-active events and allow the create.
  */
 function resolveDuplicateBeforeCreate_(
   calendarId,
   createResource,
   activePeerFeedHashes,
+  activeSourceSyncKeys,
 ) {
   const duplicates = findDuplicateEventsForResource_(
     calendarId,
     createResource,
   );
   let hasActivePeerDuplicate = false;
+  let hasActiveSameFeedDuplicate = false;
+  let sameFeedDuplicate = null;
   let deleted = 0;
   const createPrivateProps =
     ((createResource || {}).extendedProperties || {}).private || {};
@@ -2168,6 +2217,27 @@ function resolveDuplicateBeforeCreate_(
     createPrivateProps.sourceFeedName || createPrivateProps.sourceUrl;
 
   duplicates.forEach(function (duplicate) {
+    if (
+      isManagedEventForFeed_(
+        duplicate,
+        createPrivateProps.sourceUrl,
+        createPrivateProps.sourceFeed,
+      )
+    ) {
+      const duplicatePrivateProps =
+        ((duplicate || {}).extendedProperties || {}).private || {};
+      const duplicateSyncKey = duplicatePrivateProps.syncKey || "";
+      if (
+        duplicateSyncKey === createPrivateProps.syncKey ||
+        !(activeSourceSyncKeys && activeSourceSyncKeys[duplicateSyncKey])
+      ) {
+        if (!sameFeedDuplicate) sameFeedDuplicate = duplicate;
+      } else {
+        hasActiveSameFeedDuplicate = true;
+      }
+      return;
+    }
+
     if (isActivePeerSourceEvent_(duplicate, activePeerFeedHashes)) {
       hasActivePeerDuplicate = true;
       return;
@@ -2188,9 +2258,31 @@ function resolveDuplicateBeforeCreate_(
   });
 
   return {
-    skipCreate: hasActivePeerDuplicate,
+    adoptExisting: sameFeedDuplicate,
+    skipCreate:
+      !sameFeedDuplicate &&
+      !hasActiveSameFeedDuplicate &&
+      hasActivePeerDuplicate,
     deleted: deleted,
   };
+}
+
+/**
+ * Moves an already-loaded managed event to its newly adopted sync key.
+ * Reindexing immediately prevents later old-identity tombstones and cleanup from
+ * acting on the Calendar event after its metadata has been patched in place.
+ */
+function reindexExistingManagedEvent_(eventsByKey, oldKey, newKey, event) {
+  if (!eventsByKey || !oldKey || !newKey || oldKey === newKey) return null;
+  const existing = event || eventsByKey[oldKey] || null;
+  if (!existing) return null;
+
+  const alreadyIndexed = eventsByKey[newKey];
+  if (alreadyIndexed && alreadyIndexed.id !== existing.id) return null;
+
+  delete eventsByKey[oldKey];
+  eventsByKey[newKey] = existing;
+  return existing;
 }
 
 /**

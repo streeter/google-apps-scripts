@@ -2698,6 +2698,380 @@ test("syncOneFeed_ deletes unmanaged duplicate before creating managed event", (
   assert.equal(inserted.length, 1);
 });
 
+test("syncOneFeed_ does not adopt an exact same-feed duplicate whose old UID is still active", () => {
+  const ctx = loadIcalSyncContext();
+  const feedUrl = "https://example.com/current.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const oldSyncKey = ctx.buildSyncKey_(feedHash, "old-uid", "");
+  const newSyncKey = ctx.buildSyncKey_(feedHash, "new-uid", "");
+  const inserted = [];
+  const icsText = [
+    "BEGIN:VCALENDAR",
+    "BEGIN:VEVENT",
+    "UID:old-uid",
+    "DTSTART:20990501T150000Z",
+    "DTEND:20990501T160000Z",
+    "SUMMARY:Practice",
+    "DESCRIPTION:Shared event",
+    "END:VEVENT",
+    "BEGIN:VEVENT",
+    "UID:new-uid",
+    "DTSTART:20990501T150000Z",
+    "DTEND:20990501T160000Z",
+    "SUMMARY:Practice",
+    "DESCRIPTION:Shared event",
+    "END:VEVENT",
+    "END:VCALENDAR",
+  ].join("\n");
+  const oldFeedEvent = ctx.parseIcs_(icsText, "").events[0];
+  const existingEvent = {
+    id: "source-existing-old",
+    summary: "Practice",
+    description:
+      "Shared event\n\nGenerated with github.com/streeter/google-apps-scripts",
+    location: "",
+    start: { dateTime: "2099-05-01T15:00:00.000Z" },
+    end: { dateTime: "2099-05-01T16:00:00.000Z" },
+    attendees: [],
+    extendedProperties: {
+      private: {
+        managedKind: "source",
+        sourceFeed: feedHash,
+        sourceUrl: feedUrl,
+        sourceFeedName: "Current Feed",
+        sourceUid: "old-uid",
+        syncKey: oldSyncKey,
+        syncHash: ctx.computeEventHash_(oldFeedEvent, []),
+      },
+    },
+  };
+
+  ctx.fetchIcs_ = () => icsText;
+  ctx.loadExistingEventsByKey_ = () => ({
+    [oldSyncKey]: existingEvent,
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.list = () => ({ items: [existingEvent] });
+  ctx.Calendar.Events.insert = (resource, calendarId) => {
+    assert.equal(calendarId, "calendar-1");
+    inserted.push(resource);
+    return {
+      id: resource.id,
+      start: resource.start,
+      end: resource.end,
+      attendees: resource.attendees,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: true,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+      feedMappings: [{ feedUrl, calendarId: "calendar-1" }],
+    },
+    {
+      name: "Current Feed",
+      feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      attendeeEmails: [],
+      addDestinationCalendarAsAttendee: false,
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 1);
+  assert.equal(stats.updated, 0);
+  assert.equal(stats.deleted, 0);
+  assert.equal(stats.unchanged, 1);
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].extendedProperties.private.sourceUid, "new-uid");
+  assert.equal(inserted[0].extendedProperties.private.syncKey, newSyncKey);
+});
+
+test("syncOneFeed_ rekeys an adopted source before a later old-UID cancellation", () => {
+  const ctx = loadIcalSyncContext();
+  const feedUrl = "https://example.com/current.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const oldSyncKey = ctx.buildSyncKey_(feedHash, "old-uid", "");
+  const newSyncKey = ctx.buildSyncKey_(feedHash, "new-uid", "");
+  const patched = [];
+  const infoLogs = [];
+  const existingEvent = {
+    id: "source-existing-1",
+    summary: "Practice",
+    description:
+      "Shared event\n\nGenerated with github.com/streeter/google-apps-scripts",
+    location: "Seattle, WA",
+    start: { dateTime: "2099-05-01T15:00:00.000Z" },
+    end: { dateTime: "2099-05-01T16:00:00.000Z" },
+    extendedProperties: {
+      private: {
+        managedKind: "source",
+        sourceFeed: feedHash,
+        sourceUrl: feedUrl,
+        sourceFeedName: "Current Feed",
+        sourceUid: "old-uid",
+        syncKey: oldSyncKey,
+        syncHash: "old-feed-state",
+      },
+    },
+  };
+
+  ctx.console.info = (message) => infoLogs.push(String(message));
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:new-uid",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "DESCRIPTION:Shared event",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:old-uid",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "STATUS:CANCELLED",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({
+    [oldSyncKey]: existingEvent,
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.list = () => ({ items: [existingEvent] });
+  ctx.Calendar.Events.insert = () => {
+    throw new Error("unexpected insert");
+  };
+  ctx.Calendar.Events.patch = (resource, calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    assert.equal(eventId, "source-existing-1");
+    patched.push(resource);
+    return {
+      id: eventId,
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: true,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+      feedMappings: [{ feedUrl, calendarId: "calendar-1" }],
+    },
+    {
+      name: "Current Feed",
+      feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 0);
+  assert.equal(stats.updated, 1);
+  assert.equal(stats.deleted, 0);
+  assert.equal(stats.skipped, 1);
+  assert.equal(patched.length, 1);
+  assert.equal(patched[0].extendedProperties.private.sourceUid, "new-uid");
+  assert.equal(patched[0].extendedProperties.private.syncKey, newSyncKey);
+  assert.ok(
+    infoLogs.some((message) =>
+      message.includes(
+        "adopting exact same-feed event after upstream UID changed",
+      ),
+    ),
+  );
+});
+
+[true, false].forEach((deleteMissingFromFeed) => {
+  test(`syncOneFeed_ rekeys adopted placeholders in place when deleteMissingFromFeed=${deleteMissingFromFeed}`, () => {
+    const ctx = loadIcalSyncContext();
+    const feedUrl = "https://example.com/current.ics";
+    const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+    const oldSyncKey = ctx.buildSyncKey_(feedHash, "old-uid", "");
+    const newSyncKey = ctx.buildSyncKey_(feedHash, "new-uid", "");
+    const oldArrivalSyncKey = ctx.buildArrivalSyncKey_(oldSyncKey);
+    const newArrivalSyncKey = ctx.buildArrivalSyncKey_(newSyncKey);
+    const oldDriveSyncKey = ctx.buildDriveSyncKey_(oldSyncKey);
+    const newDriveSyncKey = ctx.buildDriveSyncKey_(newSyncKey);
+    const patches = [];
+    const existingSource = {
+      id: "source-existing-1",
+      summary: "Practice",
+      description:
+        "Arrival: 30 minutes in advance\n\nGenerated with github.com/streeter/google-apps-scripts",
+      location: "Seattle, WA",
+      start: { dateTime: "2099-05-01T15:00:00.000Z" },
+      end: { dateTime: "2099-05-01T16:00:00.000Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceFeedName: "Current Feed",
+          sourceUid: "old-uid",
+          syncKey: oldSyncKey,
+          syncHash: "old-source-state",
+        },
+      },
+    };
+    const existingArrival = {
+      id: "arrival-existing-1",
+      summary: "Advanced arrival for Practice",
+      start: { dateTime: "2099-05-01T14:30:00.000Z" },
+      end: { dateTime: "2099-05-01T15:00:00.000Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "arrival",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "old-uid",
+          syncKey: oldArrivalSyncKey,
+          sourceSyncKey: oldSyncKey,
+          sourceEventId: existingSource.id,
+          syncHash: "old-arrival-state",
+        },
+      },
+    };
+    const existingDrive = {
+      id: "drive-existing-1",
+      summary: "Drive to Practice",
+      start: { dateTime: "2099-05-01T14:10:00.000Z" },
+      end: { dateTime: "2099-05-01T14:30:00.000Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "drive",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "old-uid",
+          syncKey: oldDriveSyncKey,
+          sourceSyncKey: oldSyncKey,
+          sourceEventId: existingSource.id,
+          syncHash: "old-drive-state",
+        },
+      },
+    };
+
+    ctx.fetchIcs_ = () =>
+      [
+        "BEGIN:VCALENDAR",
+        "BEGIN:VEVENT",
+        "UID:new-uid",
+        "DTSTART:20990501T150000Z",
+        "DTEND:20990501T160000Z",
+        "SUMMARY:Practice",
+        "DESCRIPTION:Arrival: 30 minutes in advance",
+        "LOCATION:Seattle, WA",
+        "END:VEVENT",
+        "END:VCALENDAR",
+      ].join("\n");
+    ctx.loadExistingEventsByKey_ = () => ({
+      [oldSyncKey]: existingSource,
+    });
+    ctx.loadExistingArrivalEventsByKey_ = () => ({
+      [oldArrivalSyncKey]: existingArrival,
+    });
+    ctx.loadExistingDriveEventsByKey_ = () => ({
+      [oldDriveSyncKey]: existingDrive,
+    });
+    ctx.Calendar.Events.list = () => ({ items: [existingSource] });
+    ctx.resolveDrivePlan_ = () => ({
+      driveMinutes: 20,
+      originAddress: "Home",
+      previousEventId: "",
+    });
+    ctx.Calendar.Events.insert = () => {
+      throw new Error("unexpected insert");
+    };
+    ctx.Calendar.Events.patch = (resource, calendarId, eventId) => {
+      assert.equal(calendarId, "calendar-1");
+      patches.push({ eventId, resource });
+      return {
+        id: eventId,
+        start: resource.start,
+        end: resource.end,
+        attendees: resource.attendees,
+        extendedProperties: resource.extendedProperties,
+      };
+    };
+    ctx.Calendar.Events.remove = () => {
+      throw new Error("unexpected remove");
+    };
+
+    const stats = ctx.syncOneFeed_(
+      {
+        deleteMissingFromFeed,
+        defaultAttendeeEmails: [],
+        addDriveTimePlaceholders: false,
+        minDriveMinutesToCreate: 10,
+        driveEventTitleTemplate: "Drive to {{title}}",
+        feedMappings: [{ feedUrl, calendarId: "calendar-1" }],
+      },
+      {
+        name: "Current Feed",
+        feedUrl,
+        calendarId: "calendar-1",
+        titlePrefix: "",
+        attendeeEmails: [],
+        addDestinationCalendarAsAttendee: false,
+        addDriveTimePlaceholders: true,
+        originAddress: "Home",
+      },
+      new Date("2026-01-01T00:00:00Z"),
+    );
+
+    assert.equal(stats.created, 0);
+    assert.equal(stats.updated, 1);
+    assert.equal(stats.deleted, 0);
+    assert.equal(stats.arrivalCreated, 0);
+    assert.equal(stats.arrivalUpdated, 1);
+    assert.equal(stats.arrivalDeleted, 0);
+    assert.equal(stats.driveCreated, 0);
+    assert.equal(stats.driveUpdated, 1);
+    assert.equal(stats.driveDeleted, 0);
+    assert.deepEqual(
+      patches.map(({ eventId }) => eventId),
+      ["source-existing-1", "arrival-existing-1", "drive-existing-1"],
+    );
+
+    const arrivalPatch = patches[1].resource.extendedProperties.private;
+    assert.equal(arrivalPatch.sourceUid, "new-uid");
+    assert.equal(arrivalPatch.syncKey, newArrivalSyncKey);
+    assert.equal(arrivalPatch.sourceSyncKey, newSyncKey);
+    assert.equal(arrivalPatch.sourceEventId, existingSource.id);
+
+    const drivePatch = patches[2].resource.extendedProperties.private;
+    assert.equal(drivePatch.sourceUid, "new-uid");
+    assert.equal(drivePatch.syncKey, newDriveSyncKey);
+    assert.equal(drivePatch.sourceSyncKey, newSyncKey);
+    assert.equal(drivePatch.sourceEventId, existingSource.id);
+  });
+});
+
 test("syncOneFeed_ creates source event and tied drive placeholder", () => {
   const ctx = loadIcalSyncContext();
   const inserts = [];

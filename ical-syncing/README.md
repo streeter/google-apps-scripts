@@ -131,9 +131,9 @@ To use interval scheduling instead, omit `triggerHours` and set `triggerEveryMin
 - Per-feed `addDriveTimePlaceholders` controls whether drive placeholders are managed for that feed.
 - Placeholders are only created when computed drive time is strictly greater than `minDriveMinutesToCreate` (default `10`).
 - Drive placeholders are skipped for all-day events, events without a location, unroutable addresses, and pre-today events.
-- Before creating a synced source event, the script checks for exact duplicates on the target calendar by title, start/end time, and description. It skips duplicates already managed by another active feed for that same target calendar, and deletes non-active duplicates before creating the managed event.
-- Drive placeholders are tied to source synced events using metadata (`sourceSyncKey` and `sourceEventId`) and are managed/deleted safely.
-- Arrival placeholders are tied to source synced events using metadata and are managed/deleted safely.
+- Before creating a synced source event, the script checks for exact duplicates on the target calendar by title, start/end time, and description. It adopts and re-keys an exact duplicate already managed by the same feed only when the old UID or recurrence identity is no longer active in the feed, preserves independently active same-feed identities, skips duplicates managed by another active feed for that same target calendar, and deletes non-active duplicates before creating the managed event.
+- Drive placeholders are tied to source synced events using metadata (`sourceSyncKey` and `sourceEventId`), re-keyed in place when their source is adopted, and managed/deleted safely.
+- Arrival placeholders are tied to source synced events using metadata, re-keyed in place when their source is adopted, and managed/deleted safely.
 - The script uses event metadata (`extendedProperties.private`) to track synced items and detect changes.
 - Every managed insert uses a deterministic Google Calendar event ID derived from its `syncKey`, preventing a retried insert from creating a second API event with a different ID.
 - A duplicate deterministic ID is treated as a successful insert only when the existing, non-cancelled Calendar event has the expected `syncKey`; mismatches fail instead of silently adopting an unrelated event.
