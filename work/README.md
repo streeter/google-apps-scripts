@@ -18,6 +18,43 @@ This directory contains scripts focused on day-to-day work calendar management.
 6. Run each script's main function once to authorize.
 7. Add time-based triggers for the functions you want to run automatically.
 
+## Deploy with clasp
+
+This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev dependency and a placeholder `.clasp.json` for this script directory.
+
+1. Enable the Apps Script API at `https://script.google.com/home/usersettings`.
+2. Authenticate once:
+
+   ```bash
+   npm run clasp:login
+   ```
+
+3. Edit `work/.clasp.json` and replace `REPLACE_WITH_APPS_SCRIPT_PROJECT_SCRIPT_ID` with the Apps Script project script ID.
+   - In the Apps Script editor, find it under **Project Settings** → **Script ID**.
+   - Keep `rootDir` set to `"."`.
+4. Ensure the local config files exist with your real values:
+   - `work/colorAttendeeConfig.gs` (from `colorAttendeeConfig.example.gs`)
+   - `work/getPersonalCalendar.gs` (from `getPersonalCalendar.example.gs`)
+5. Push the work files:
+
+   ```bash
+   npm run clasp:push:work
+   ```
+
+6. Pull remote changes back down when editing in the Apps Script UI:
+
+   ```bash
+   npm run clasp:pull:work
+   ```
+
+7. Open the Apps Script project when needed:
+
+   ```bash
+   npm run clasp:open:work
+   ```
+
+`work/.claspignore` excludes local docs, tests, the placeholder `.clasp.json`, and the example configs from uploads. `appsscript.json` must be uploaded because Apps Script requires a manifest. The real `colorAttendeeConfig.gs` and `getPersonalCalendar.gs` remain gitignored, but they will be uploaded by `clasp push` when present locally.
+
 ## Scripts
 
 - `colorBasedOnAttendees.gs`: colors each event based on attendees and matching rules.
