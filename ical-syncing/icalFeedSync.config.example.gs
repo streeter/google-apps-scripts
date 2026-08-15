@@ -20,6 +20,7 @@
  *       attendeeEmails?: string[],
  *       addDestinationCalendarAsAttendee?: boolean,
  *       skipAllDayEvents?: boolean,
+ *       ignoreEventPattern?: RegExp | string,
  *       advancedArrival?: {
  *         pattern: RegExp | string, // Matches the upstream description.
  *         minutes?: number,         // Positive integer; defaults to 30.
@@ -101,6 +102,11 @@ function getIcalSyncConfig() {
         // Optional per-feed filter. When true, all-day source events are skipped.
         skipAllDayEvents: false,
 
+        // Optional per-feed regex for ignoring source events. The pattern is
+        // checked against the upstream summary, description, and location.
+        // The first matching field and exact matched text are logged.
+        // ignoreEventPattern: /cancelled|do not import/i,
+
         // Optional per-feed advanced-arrival rule. The pattern is matched
         // against the upstream event description. It may be a RegExp or a
         // regex source string. Omit minutes to default to 30.
@@ -130,6 +136,7 @@ function getIcalSyncConfig() {
       //   calendarId: "another_calendar_id@group.calendar.google.com",
       //   titlePrefix: "[Another]",
       //   skipAllDayEvents: true,
+      //   ignoreEventPattern: /cancelled|do not import/i,
       //   addDestinationCalendarAsAttendee: false,
       //   attendeeEmails: ["special-person@yourcompany.com"]
       // }

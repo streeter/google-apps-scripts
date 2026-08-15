@@ -299,6 +299,49 @@ test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
   assert.equal(cfg.feedMappings[0].skipAllDayEvents, false);
 });
 
+test("getIcalSyncConfig_ validates and normalizes per-feed ignoreEventPattern", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+        ignoreEventPattern: /cancelled|do not import/gi,
+      },
+    ],
+  });
+
+  const pattern = ctx.getIcalSyncConfig_().feedMappings[0].ignoreEventPattern;
+
+  assert.equal(pattern.source, "cancelled|do not import");
+  assert.equal(pattern.flags, "gi");
+  assert.equal(pattern.test("Do Not Import"), true);
+});
+
+test("getIcalSyncConfig_ rejects invalid per-feed ignoreEventPattern", () => {
+  const invalidPatterns = [null, "", "[", 42];
+
+  invalidPatterns.forEach((ignoreEventPattern) => {
+    const ctx = loadIcalSyncContext();
+    ctx.getIcalSyncConfig = () => ({
+      feedMappings: [
+        {
+          name: "Feed A",
+          feedUrl: "https://example.com/a.ics",
+          calendarId: "cal1",
+          ignoreEventPattern,
+        },
+      ],
+    });
+
+    assert.throws(
+      () => ctx.getIcalSyncConfig_(),
+      /feedMappings\[0\]\.ignoreEventPattern/,
+    );
+  });
+});
+
 test("getIcalSyncConfig_ defaults destination calendar attendee to true", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
@@ -1419,6 +1462,39 @@ test("calendarEventInsert_ rejects a mismatched deterministic ID conflict", () =
   assert.match(errors[0], /errorType=non_quota_error/);
 });
 
+test("findIgnoreEventMatch_ checks upstream text fields and returns exact matched text", () => {
+  const ctx = loadIcalSyncContext();
+  const evt = {
+    summary: "Private Team Practice",
+    description: "Status: private\nNotes follow",
+    location: "Private Field",
+  };
+
+  assert.equal(
+    JSON.stringify(ctx.findIgnoreEventMatch_(evt, /private/gi)),
+    JSON.stringify({ field: "summary", text: "Private" }),
+  );
+  assert.equal(
+    JSON.stringify(
+      ctx.findIgnoreEventMatch_(
+        { summary: "Practice", description: evt.description },
+        "Status:\\s*private",
+      ),
+    ),
+    JSON.stringify({ field: "description", text: "Status: private" }),
+  );
+  assert.equal(
+    JSON.stringify(
+      ctx.findIgnoreEventMatch_(
+        { summary: "Practice", description: "", location: "Private Field" },
+        /private field/i,
+      ),
+    ),
+    JSON.stringify({ field: "location", text: "Private Field" }),
+  );
+  assert.equal(ctx.findIgnoreEventMatch_(evt, /public/i), null);
+});
+
 test("resolveAdvancedArrivalForEvent_ matches descriptions and defaults to 30 minutes", () => {
   const ctx = loadIcalSyncContext();
   assert.equal(
@@ -2165,6 +2241,112 @@ test("syncOneFeed_ optionally filters out all-day events for a feed", () => {
   assert.equal(stats.skipped, 1);
   assert.equal(inserts.length, 1);
   assert.equal(inserts[0].summary, "Practice");
+});
+
+test("syncOneFeed_ ignores regex matches, logs matched text, and cleans up managed events", () => {
+  const ctx = loadIcalSyncContext();
+  const inserts = [];
+  const removed = [];
+  const infoLogs = [];
+  const logs = [];
+  const feedUrl = "https://example.com/feed.ics";
+  const feedHash = ctx.sha256Hex_(feedUrl).slice(0, 16);
+  const ignoredSyncKey = ctx.buildSyncKey_(feedHash, "ignored-1", "");
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:ignored-1",
+      "DTSTART:20990501T130000Z",
+      "DTEND:20990501T140000Z",
+      "SUMMARY:Duplicate Practice",
+      "DESCRIPTION:Internal note\\nDo Not Import: Duplicate Listing",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:allowed-1",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Regular Practice",
+      "LOCATION:Seattle, WA",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({
+    [ignoredSyncKey]: {
+      id: "ignored-source-1",
+      summary: "Duplicate Practice",
+      start: { dateTime: "2099-05-01T13:00:00Z" },
+      end: { dateTime: "2099-05-01T14:00:00Z" },
+      extendedProperties: {
+        private: {
+          managedKind: "source",
+          sourceFeed: feedHash,
+          sourceUrl: feedUrl,
+          sourceUid: "ignored-1",
+          syncKey: ignoredSyncKey,
+        },
+      },
+    },
+  });
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.insert = (resource) => {
+    inserts.push(resource);
+    return {
+      id: "created-source-1",
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = (calendarId, eventId) => {
+    assert.equal(calendarId, "calendar-1");
+    removed.push(eventId);
+  };
+  ctx.console.info = (message) => infoLogs.push(String(message));
+  ctx.console.log = (message) => logs.push(String(message));
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: true,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+      feedMappings: [{ feedUrl, calendarId: "calendar-1" }],
+    },
+    {
+      name: "Filtered Feed",
+      feedUrl,
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      ignoreEventPattern: /do not import:\s*duplicate listing/i,
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 1);
+  assert.equal(stats.deleted, 1);
+  assert.equal(stats.skipped, 1);
+  assert.equal(stats.ignored, 1);
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].summary, "Regular Practice");
+  assert.deepEqual(removed, ["ignored-source-1"]);
+  assert.ok(
+    infoLogs.includes(
+      '[IGNORE] source event "Duplicate Practice" on 2099-05-01 in calendar-1 from Filtered Feed — ignoreEventPattern matched description text "Do Not Import: Duplicate Listing"',
+    ),
+  );
+  assert.ok(
+    logs.includes(
+      '[DELETE] source event "Duplicate Practice" on 2099-05-01 in calendar-1 from Filtered Feed — ignored by ignoreEventPattern',
+    ),
+  );
 });
 
 test("syncOneFeed_ logs the event title when create insert fails", () => {

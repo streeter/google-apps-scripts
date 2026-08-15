@@ -15,6 +15,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 - Gives timed events without `DTEND` a default duration of 30 minutes.
 - Forces synced local events to match upstream feed fields on each run (including start/end date and time).
 - Overwrites local edits to synced events on subsequent sync runs.
+- Can ignore events per feed when their upstream summary, description, or location matches a configured regex, with the matched field and text logged.
 - Optionally creates managed drive-time placeholder events from a configured origin address to event location.
 - Drive-time placeholder descriptions include the origin, destination, and a Google Maps driving-directions link.
 - For drive placeholders, the script first tries to route from the previous non-placeholder event location on the destination calendar; if already there or within threshold, it skips creating drive time.
@@ -35,6 +36,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
    - Set per-feed `timeZone` when a feed publishes floating times without an `X-WR-TIMEZONE` or `TZID`.
    - Optionally set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`; a provided per-feed list overrides defaults, including an empty list.
    - Set per-feed `addDestinationCalendarAsAttendee: false` when the destination calendar should not also appear in the event attendee list.
+   - Optionally set per-feed `ignoreEventPattern` to ignore events whose upstream summary, description, or location matches a regex.
    - Optionally set per-feed `advancedArrival` with a description-matching regex, a required purpose, and optional minutes.
    - Optionally add `placeNameAddressMap` entries when event locations contain venue names instead of full addresses.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
@@ -102,6 +104,7 @@ function getIcalSyncConfig() {
         attendeeEmails: [],
         addDestinationCalendarAsAttendee: false,
         skipAllDayEvents: false,
+        ignoreEventPattern: /cancelled|do not import/i,
         advancedArrival: {
           pattern: /Event Type:\s*Game/i,
           minutes: 30,
@@ -130,6 +133,7 @@ To use interval scheduling instead, omit `triggerHours` and set `triggerEveryMin
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
 - Per-feed `timeZone` is the fallback for floating `DTSTART`/`DTEND` values when the feed does not declare a timezone. If omitted, the Apps Script project timezone is used.
 - Per-feed `skipAllDayEvents` filters out all-day source events for that feed when set to `true`. Default: `false`.
+- Per-feed `ignoreEventPattern` may be a JavaScript `RegExp` or regex source string. It checks the upstream event's summary, description, and location independently, in that order. A match prevents the event from being created or updated and writes an `[IGNORE]` log containing the event context, matched field, and exact matched text. When `deleteMissingFromFeed` is enabled, previously managed source events and placeholders that now match are deleted as ignored.
 - Per-feed `advancedArrival` enables advanced-arrival placeholders only for source events whose descriptions match `pattern`. `pattern` is required and may be a JavaScript `RegExp` or a regex source string; `purpose` is required and produces the title `Advanced arrival for <purpose>`; `minutes` is optional and defaults to `30`.
 - `placeNameAddressMap` lets you translate venue names in locations into routable addresses before drive lookup.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when provided, including an empty list.

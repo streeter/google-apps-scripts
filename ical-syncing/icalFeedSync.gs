@@ -301,6 +301,7 @@ function syncOneFeed_(cfg, mapping, today) {
   const activeSourceSyncKeys = {};
   parsed.events.forEach(function (evt) {
     if (evt.cancelled) return;
+    if (findIgnoreEventMatch_(evt, mapping.ignoreEventPattern)) return;
     activeSourceSyncKeys[
       buildSyncKey_(feedHash, evt.uid, evt.recurrenceIdKey)
     ] = true;
@@ -343,6 +344,7 @@ function syncOneFeed_(cfg, mapping, today) {
   );
 
   const seen = {};
+  const ignoredSourceSyncKeys = {};
   const seenArrival = {};
   const seenDrive = {};
   const stats = {
@@ -352,6 +354,7 @@ function syncOneFeed_(cfg, mapping, today) {
     deleted: 0,
     unchanged: 0,
     skipped: 0,
+    ignored: 0,
     driveCreated: 0,
     driveUpdated: 0,
     driveDeleted: 0,
@@ -363,6 +366,31 @@ function syncOneFeed_(cfg, mapping, today) {
   };
 
   parsed.events.forEach(function (evt) {
+    const ignoreMatch = findIgnoreEventMatch_(evt, mapping.ignoreEventPattern);
+    if (ignoreMatch) {
+      const ignoredSyncKey = buildSyncKey_(
+        feedHash,
+        evt.uid,
+        evt.recurrenceIdKey,
+      );
+      ignoredSourceSyncKeys[ignoredSyncKey] = true;
+      stats.skipped++;
+      stats.ignored++;
+      console.info(
+        "[IGNORE] " +
+          formatEventLogContext_(
+            evt,
+            mapping.calendarId,
+            feedName,
+            "source event",
+          ) +
+          " — ignoreEventPattern matched " +
+          ignoreMatch.field +
+          " text " +
+          JSON.stringify(ignoreMatch.text),
+      );
+      return;
+    }
     const effectiveEvt = applyPlaceNameAddressToEvent_(
       applyEventTitlePrefix_(evt, mapping.titlePrefix),
       driveOpts.placeNameAddressRules,
@@ -815,6 +843,9 @@ function syncOneFeed_(cfg, mapping, today) {
     Object.keys(existingByKey).forEach(function (syncKey) {
       if (seen[syncKey]) return;
       const ev = existingByKey[syncKey];
+      const missingReason = ignoredSourceSyncKeys[syncKey]
+        ? "ignored by ignoreEventPattern"
+        : "missing from feed";
       if (!isManagedEventForFeed_(ev, mapping.feedUrl, feedHash)) {
         console.info(
           "[SKIP] " +
@@ -824,7 +855,9 @@ function syncOneFeed_(cfg, mapping, today) {
               feedName,
               "source event",
             ) +
-            " — missing from feed, but event is not managed by this feed",
+            " — " +
+            missingReason +
+            ", but event is not managed by this feed",
         );
         return;
       }
@@ -839,7 +872,8 @@ function syncOneFeed_(cfg, mapping, today) {
               feedName,
               "source event",
             ) +
-            " — missing from feed",
+            " — " +
+            missingReason,
         );
       }
     });
@@ -847,6 +881,10 @@ function syncOneFeed_(cfg, mapping, today) {
     Object.keys(existingDriveByKey).forEach(function (driveSyncKey) {
       if (seenDrive[driveSyncKey]) return;
       const driveEv = existingDriveByKey[driveSyncKey];
+      const sourceSyncKey = driveSyncKey.slice("drive:".length);
+      const missingReason = ignoredSourceSyncKeys[sourceSyncKey]
+        ? "source event ignored by ignoreEventPattern"
+        : "missing from feed";
       if (!isManagedDriveEventForFeed_(driveEv, mapping.feedUrl, feedHash)) {
         console.info(
           "[SKIP] " +
@@ -856,7 +894,9 @@ function syncOneFeed_(cfg, mapping, today) {
               feedName,
               "drive placeholder",
             ) +
-            " — missing from feed, but placeholder is not managed by this feed",
+            " — " +
+            missingReason +
+            ", but placeholder is not managed by this feed",
         );
         return;
       }
@@ -871,7 +911,8 @@ function syncOneFeed_(cfg, mapping, today) {
               feedName,
               "drive placeholder",
             ) +
-            " — missing from feed",
+            " — " +
+            missingReason,
         );
       }
     });
@@ -879,6 +920,10 @@ function syncOneFeed_(cfg, mapping, today) {
     Object.keys(existingArrivalByKey).forEach(function (arrivalSyncKey) {
       if (seenArrival[arrivalSyncKey]) return;
       const arrivalEv = existingArrivalByKey[arrivalSyncKey];
+      const sourceSyncKey = arrivalSyncKey.slice("arrival:".length);
+      const missingReason = ignoredSourceSyncKeys[sourceSyncKey]
+        ? "source event ignored by ignoreEventPattern"
+        : "missing from feed";
       if (
         !isManagedArrivalEventForFeed_(arrivalEv, mapping.feedUrl, feedHash)
       ) {
@@ -890,7 +935,9 @@ function syncOneFeed_(cfg, mapping, today) {
               feedName,
               "arrival placeholder",
             ) +
-            " — missing from feed, but placeholder is not managed by this feed",
+            " — " +
+            missingReason +
+            ", but placeholder is not managed by this feed",
         );
         return;
       }
@@ -905,7 +952,8 @@ function syncOneFeed_(cfg, mapping, today) {
               feedName,
               "arrival placeholder",
             ) +
-            " — missing from feed",
+            " — " +
+            missingReason,
         );
       }
     });
@@ -925,6 +973,8 @@ function syncOneFeed_(cfg, mapping, today) {
       stats.unchanged +
       ", skipped=" +
       stats.skipped +
+      ", ignored=" +
+      stats.ignored +
       ", driveCreated=" +
       stats.driveCreated +
       ", driveUpdated=" +
@@ -1075,6 +1125,12 @@ function getIcalSyncConfig_() {
     if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
     if (typeof m.timeZone !== "string") m.timeZone = "";
     if (typeof m.skipAllDayEvents !== "boolean") m.skipAllDayEvents = false;
+    if (Object.prototype.hasOwnProperty.call(m, "ignoreEventPattern")) {
+      m.ignoreEventPattern = normalizeIgnoreEventPattern_(
+        m.ignoreEventPattern,
+        "feedMappings[" + i + "].ignoreEventPattern",
+      );
+    }
     if (typeof m.addDestinationCalendarAsAttendee !== "boolean")
       m.addDestinationCalendarAsAttendee = true;
     if (Object.prototype.hasOwnProperty.call(m, "advancedArrival")) {
@@ -1096,6 +1152,29 @@ function getIcalSyncConfig_() {
   });
 
   return cfg;
+}
+
+/**
+ * Validates and normalizes a per-feed event-ignore regular expression.
+ */
+function normalizeIgnoreEventPattern_(configuredPattern, configPath) {
+  const path = configPath || "ignoreEventPattern";
+  const isRegExp =
+    Object.prototype.toString.call(configuredPattern) === "[object RegExp]";
+  if (
+    (!isRegExp && typeof configuredPattern !== "string") ||
+    (typeof configuredPattern === "string" && !configuredPattern.trim())
+  ) {
+    throw new Error(path + " must be a non-empty string or RegExp.");
+  }
+
+  try {
+    return isRegExp
+      ? new RegExp(configuredPattern.source, configuredPattern.flags)
+      : new RegExp(configuredPattern);
+  } catch (e) {
+    throw new Error(path + " must be a valid regular expression.");
+  }
 }
 
 /**
@@ -3807,6 +3886,46 @@ function roundDriveMinutesForPlaceholder_(minutes) {
   if (minutes <= 15) return 15;
   if (minutes <= 20) return 20;
   return Math.ceil(minutes / 10) * 10;
+}
+
+/**
+ * Returns the first upstream event text matched by a feed's ignore pattern.
+ * Fields are checked independently so a match cannot span field boundaries.
+ */
+function findIgnoreEventMatch_(evt, configuredPattern) {
+  if (!configuredPattern) return null;
+
+  let pattern;
+  try {
+    if (
+      Object.prototype.toString.call(configuredPattern) === "[object RegExp]"
+    ) {
+      pattern = new RegExp(configuredPattern.source, configuredPattern.flags);
+    } else if (
+      typeof configuredPattern === "string" &&
+      configuredPattern.trim()
+    ) {
+      pattern = new RegExp(configuredPattern);
+    } else {
+      return null;
+    }
+  } catch (e) {
+    return null;
+  }
+
+  const fields = [
+    { field: "summary", text: String((evt && evt.summary) || "") },
+    { field: "description", text: String((evt && evt.description) || "") },
+    { field: "location", text: String((evt && evt.location) || "") },
+  ];
+  for (let i = 0; i < fields.length; i++) {
+    pattern.lastIndex = 0;
+    const match = pattern.exec(fields[i].text);
+    if (match) {
+      return { field: fields[i].field, text: match[0] };
+    }
+  }
+  return null;
 }
 
 /**
