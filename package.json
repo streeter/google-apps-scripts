@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "clasp:login": "clasp login",
-    "clasp:open:ical": "cd ical-syncing && clasp open",
+    "clasp:open:ical": "cd ical-syncing && clasp open-script",
     "clasp:push:ical": "cd ical-syncing && clasp push",
     "clasp:pull:ical": "cd ical-syncing && clasp pull",
-    "clasp:open:work": "cd work && clasp open",
+    "clasp:open:work": "cd work && clasp open-script",
     "clasp:push:work": "cd work && clasp push",
     "clasp:pull:work": "cd work && clasp pull",
     "lint": "prettier --check \"README.md\" \"work/**/*.{gs,js,md}\" \"ical-syncing/**/*.{gs,md}\" \"**/*.test.js\" \".github/workflows/**/*.yml\" \"package.json\"",
