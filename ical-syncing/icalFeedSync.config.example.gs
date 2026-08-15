@@ -20,7 +20,7 @@
  *       attendeeEmails?: string[],
  *       addDestinationCalendarAsAttendee?: boolean,
  *       skipAllDayEvents?: boolean,
- *       ignoreEventPattern?: RegExp | string,
+ *       ignoreEventPattern?: RegExp | string, // Matches upstream summary, description, or location.
  *       advancedArrival?: {
  *         pattern: RegExp | string, // Matches the upstream description.
  *         minutes?: number,         // Positive integer; defaults to 30.
