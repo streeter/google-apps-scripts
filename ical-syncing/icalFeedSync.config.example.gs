@@ -1,3 +1,38 @@
+/*
+ * Configuration schema (`?` means optional):
+ * {
+ *   triggerHours?: number[],
+ *   triggerEveryMinutes?: number,
+ *   deleteMissingFromFeed?: boolean,
+ *   addDriveTimePlaceholders?: boolean,
+ *   defaultOriginAddress?: string,
+ *   placeNameAddressMap?: { [placeName: string]: string },
+ *   minDriveMinutesToCreate?: number,
+ *   driveEventTitleTemplate?: string,
+ *   defaultAttendeeEmails?: string[],
+ *   feedMappings: [
+ *     {
+ *       name: string,
+ *       feedUrl: string,
+ *       calendarId: string,
+ *       titlePrefix?: string,
+ *       timeZone?: string,
+ *       attendeeEmails?: string[],
+ *       addDestinationCalendarAsAttendee?: boolean,
+ *       skipAllDayEvents?: boolean,
+ *       advancedArrival?: {
+ *         pattern: RegExp | string, // Matches the upstream description.
+ *         minutes?: number,         // Positive integer; defaults to 30.
+ *         purpose: string,          // Title: "Advanced arrival for <purpose>".
+ *       },
+ *       addDriveTimePlaceholders?: boolean,
+ *       originAddress?: string,
+ *       placeNameAddressMap?: { [placeName: string]: string },
+ *     },
+ *   ],
+ * }
+ */
+
 /**
  * Copy this file to: icalFeedSync.config.gs
  * Then fill in real calendar IDs and optional attendee emails.
@@ -65,6 +100,15 @@ function getIcalSyncConfig() {
 
         // Optional per-feed filter. When true, all-day source events are skipped.
         skipAllDayEvents: false,
+
+        // Optional per-feed advanced-arrival rule. The pattern is matched
+        // against the upstream event description. It may be a RegExp or a
+        // regex source string. Omit minutes to default to 30.
+        advancedArrival: {
+          pattern: /Event Type:\s*Game/i,
+          // minutes: 45,
+          purpose: "Game",
+        },
 
         // Optional per-feed drive placeholder settings.
         addDriveTimePlaceholders: true,

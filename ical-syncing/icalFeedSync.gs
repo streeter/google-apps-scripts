@@ -20,6 +20,7 @@ const CALENDAR_WRITE_MAX_ATTEMPTS = 5;
 const CALENDAR_WRITE_BASE_SLEEP_MS = 500;
 const SYNC_LOCK_WAIT_MS = 1000;
 const DEFAULT_TIMED_EVENT_DURATION_MINUTES = 30;
+const DEFAULT_ADVANCED_ARRIVAL_MINUTES = 30;
 const CALENDAR_WRITE_DIAGNOSTICS = {
   started: 0,
   succeeded: 0,
@@ -1076,6 +1077,12 @@ function getIcalSyncConfig_() {
     if (typeof m.skipAllDayEvents !== "boolean") m.skipAllDayEvents = false;
     if (typeof m.addDestinationCalendarAsAttendee !== "boolean")
       m.addDestinationCalendarAsAttendee = true;
+    if (Object.prototype.hasOwnProperty.call(m, "advancedArrival")) {
+      m.advancedArrival = normalizeAdvancedArrivalConfig_(
+        m.advancedArrival,
+        "feedMappings[" + i + "].advancedArrival",
+      );
+    }
     if (typeof m.addDriveTimePlaceholders !== "boolean")
       m.addDriveTimePlaceholders = cfg.addDriveTimePlaceholders;
     if (typeof m.originAddress !== "string") m.originAddress = "";
@@ -1089,6 +1096,61 @@ function getIcalSyncConfig_() {
   });
 
   return cfg;
+}
+
+/**
+ * Validates and normalizes an optional per-feed advanced-arrival rule.
+ */
+function normalizeAdvancedArrivalConfig_(advancedArrival, configPath) {
+  const path = configPath || "advancedArrival";
+  if (
+    !advancedArrival ||
+    typeof advancedArrival !== "object" ||
+    Array.isArray(advancedArrival)
+  ) {
+    throw new Error(path + " must be an object.");
+  }
+
+  const configuredPattern = advancedArrival.pattern;
+  const isRegExp =
+    Object.prototype.toString.call(configuredPattern) === "[object RegExp]";
+  if (
+    (!isRegExp && typeof configuredPattern !== "string") ||
+    (typeof configuredPattern === "string" && !configuredPattern.trim())
+  ) {
+    throw new Error(path + ".pattern must be a non-empty string or RegExp.");
+  }
+
+  try {
+    advancedArrival.pattern = isRegExp
+      ? new RegExp(configuredPattern.source, configuredPattern.flags)
+      : new RegExp(configuredPattern);
+  } catch (e) {
+    throw new Error(path + ".pattern must be a valid regular expression.");
+  }
+
+  if (
+    typeof advancedArrival.purpose !== "string" ||
+    !advancedArrival.purpose.trim()
+  ) {
+    throw new Error(path + ".purpose must be a non-empty string.");
+  }
+  advancedArrival.purpose = advancedArrival.purpose.trim();
+
+  if (typeof advancedArrival.minutes === "undefined") {
+    advancedArrival.minutes = DEFAULT_ADVANCED_ARRIVAL_MINUTES;
+  } else if (
+    typeof advancedArrival.minutes !== "number" ||
+    !isFinite(advancedArrival.minutes) ||
+    advancedArrival.minutes <= 0 ||
+    advancedArrival.minutes !== Math.floor(advancedArrival.minutes)
+  ) {
+    throw new Error(
+      path + ".minutes must be a positive integer when provided.",
+    );
+  }
+
+  return advancedArrival;
 }
 
 /**
@@ -2668,8 +2730,8 @@ function reconcileArrivalPlaceholder_(
     return null;
   }
 
-  const arrivalMinutes = extractArrivalLeadMinutes_(evt.description);
-  if (!arrivalMinutes || arrivalMinutes <= 0) {
+  const advancedArrival = resolveAdvancedArrivalForEvent_(evt, mapping);
+  if (!advancedArrival) {
     stats.arrivalSkipped++;
     maybeDeleteArrivalPlaceholder_(
       mapping,
@@ -2678,10 +2740,11 @@ function reconcileArrivalPlaceholder_(
       existingArrivalByKey,
       today,
       stats,
-      "source event has no arrival lead-time instruction",
+      "source event does not match the advanced-arrival rule",
     );
     return null;
   }
+  const arrivalMinutes = advancedArrival.minutes;
 
   const sourceStart = getSourceEventStartDate_(syncedEvent);
   if (!sourceStart) {
@@ -2712,7 +2775,7 @@ function reconcileArrivalPlaceholder_(
   const arrivalStart = new Date(
     arrivalEnd.getTime() - arrivalMinutes * 60 * 1000,
   );
-  const arrivalTitle = "Advanced arrival for " + (evt.summary || "(No title)");
+  const arrivalTitle = "Advanced arrival for " + advancedArrival.purpose;
   const arrivalHash = computeArrivalPlaceholderHash_(
     sourceSyncKey,
     syncedEvent.id,
@@ -3747,18 +3810,47 @@ function roundDriveMinutesForPlaceholder_(minutes) {
 }
 
 /**
- * Extracts lead-time minutes from event descriptions like:
- * "Arrival: 30 minutes in advance"
+ * Returns the configured advanced-arrival details when the source event
+ * description matches this feed's rule.
  */
-function extractArrivalLeadMinutes_(description) {
-  const text = String(description || "");
-  const m = text.match(
-    /(?:^|\n)\s*Arrival:\s*(\d+)\s*minutes?\s*in\s*advance\b/i,
-  );
-  if (!m) return null;
-  const minutes = Number(m[1]);
-  if (!isFinite(minutes) || minutes <= 0) return null;
-  return Math.floor(minutes);
+function resolveAdvancedArrivalForEvent_(evt, mapping) {
+  const config = mapping && mapping.advancedArrival;
+  if (!config) return null;
+
+  let pattern = config.pattern;
+  try {
+    if (Object.prototype.toString.call(pattern) === "[object RegExp]") {
+      pattern = new RegExp(pattern.source, pattern.flags);
+    } else if (typeof pattern === "string" && pattern.trim()) {
+      pattern = new RegExp(pattern);
+    } else {
+      return null;
+    }
+  } catch (e) {
+    return null;
+  }
+
+  if (!pattern.test(String((evt && evt.description) || ""))) return null;
+
+  const minutes =
+    typeof config.minutes === "undefined"
+      ? DEFAULT_ADVANCED_ARRIVAL_MINUTES
+      : config.minutes;
+  if (
+    typeof minutes !== "number" ||
+    !isFinite(minutes) ||
+    minutes <= 0 ||
+    minutes !== Math.floor(minutes) ||
+    typeof config.purpose !== "string" ||
+    !config.purpose.trim()
+  ) {
+    return null;
+  }
+
+  return {
+    minutes: minutes,
+    purpose: config.purpose.trim(),
+  };
 }
 
 /**

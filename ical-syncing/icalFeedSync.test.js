@@ -394,6 +394,63 @@ test("getIcalSyncConfig_ rejects duplicate feed mapping names", () => {
   );
 });
 
+test("getIcalSyncConfig_ validates and defaults per-feed advancedArrival", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+        advancedArrival: {
+          pattern: /event type:\s*game/i,
+          purpose: " Game warmup ",
+        },
+      },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+  const advancedArrival = cfg.feedMappings[0].advancedArrival;
+
+  assert.equal(advancedArrival.minutes, 30);
+  assert.equal(advancedArrival.purpose, "Game warmup");
+  assert.equal(advancedArrival.pattern.test("Event Type: Game"), true);
+});
+
+test("getIcalSyncConfig_ rejects invalid per-feed advancedArrival", () => {
+  const invalidCases = [
+    [null, /advancedArrival must be an object/],
+    [{ purpose: "Game" }, /advancedArrival\.pattern/],
+    [{ pattern: "[", purpose: "Game" }, /valid regular expression/],
+    [{ pattern: "Game" }, /advancedArrival\.purpose/],
+    [
+      { pattern: "Game", purpose: "Game", minutes: 0 },
+      /advancedArrival\.minutes/,
+    ],
+    [
+      { pattern: "Game", purpose: "Game", minutes: 30.5 },
+      /advancedArrival\.minutes/,
+    ],
+  ];
+
+  invalidCases.forEach(([advancedArrival, expectedError]) => {
+    const ctx = loadIcalSyncContext();
+    ctx.getIcalSyncConfig = () => ({
+      feedMappings: [
+        {
+          name: "Feed A",
+          feedUrl: "https://example.com/a.ics",
+          calendarId: "cal1",
+          advancedArrival,
+        },
+      ],
+    });
+
+    assert.throws(() => ctx.getIcalSyncConfig_(), expectedError);
+  });
+});
+
 test("applyTriggerInterval_ maps minute values to minutes/hours/days", () => {
   const ctx = loadIcalSyncContext();
   const calls = [];
@@ -1362,19 +1419,61 @@ test("calendarEventInsert_ rejects a mismatched deterministic ID conflict", () =
   assert.match(errors[0], /errorType=non_quota_error/);
 });
 
-test("extractArrivalLeadMinutes_ parses Arrival lead time from description", () => {
+test("resolveAdvancedArrivalForEvent_ matches descriptions and defaults to 30 minutes", () => {
   const ctx = loadIcalSyncContext();
   assert.equal(
-    ctx.extractArrivalLeadMinutes_(
-      "Event Type: Practice\nArrival: 30 minutes in advance\nHome/Away: Home",
+    JSON.stringify(
+      ctx.resolveAdvancedArrivalForEvent_(
+        { description: "Event Type: Game\nHome/Away: Home" },
+        {
+          advancedArrival: {
+            pattern: /event type:\s*game/i,
+            purpose: "Game",
+          },
+        },
+      ),
     ),
-    30,
+    JSON.stringify({ minutes: 30, purpose: "Game" }),
   );
   assert.equal(
-    ctx.extractArrivalLeadMinutes_("Arrival: 1 minute in advance"),
-    1,
+    ctx.resolveAdvancedArrivalForEvent_(
+      { description: "Event Type: Practice" },
+      {
+        advancedArrival: {
+          pattern: "Event Type: Game",
+          purpose: "Game",
+        },
+      },
+    ),
+    null,
   );
-  assert.equal(ctx.extractArrivalLeadMinutes_("No arrival guidance"), null);
+  assert.equal(
+    ctx.resolveAdvancedArrivalForEvent_(
+      { description: "Event Type: Game" },
+      {},
+    ),
+    null,
+  );
+});
+
+test("resolveAdvancedArrivalForEvent_ honors a customized 45-minute arrival", () => {
+  const ctx = loadIcalSyncContext();
+
+  assert.equal(
+    JSON.stringify(
+      ctx.resolveAdvancedArrivalForEvent_(
+        { description: "Event Type: Practice" },
+        {
+          advancedArrival: {
+            pattern: "Event Type: Practice",
+            minutes: 45,
+            purpose: "Practice",
+          },
+        },
+      ),
+    ),
+    JSON.stringify({ minutes: 45, purpose: "Practice" }),
+  );
 });
 
 test("resolveDrivePlan_ prefers previous event location and skips short/no-op drives", () => {
@@ -3038,6 +3137,11 @@ test("syncOneFeed_ rekeys an adopted source before a later old-UID cancellation"
         titlePrefix: "",
         attendeeEmails: [],
         addDestinationCalendarAsAttendee: false,
+        advancedArrival: {
+          pattern: "Arrival: 30 minutes in advance",
+          minutes: 30,
+          purpose: "Practice",
+        },
         addDriveTimePlaceholders: true,
         originAddress: "Home",
       },
@@ -3244,6 +3348,10 @@ test("syncOneFeed_ creates attendee-free source and placeholders when configured
     attendeeEmails: [],
     addDestinationCalendarAsAttendee: false,
     titlePrefix: "[Sports]",
+    advancedArrival: {
+      pattern: "Event Type: Practice",
+      purpose: "Game",
+    },
     addDriveTimePlaceholders: true,
     originAddress: "",
   };
@@ -3278,7 +3386,7 @@ test("syncOneFeed_ creates attendee-free source and placeholders when configured
   assert.ok(drive);
   assert.equal(source.summary, "[Sports] Soccer Game");
   assert.equal(JSON.stringify(source.attendees), JSON.stringify([]));
-  assert.equal(arrival.summary, "Advanced arrival for [Sports] Soccer Game");
+  assert.equal(arrival.summary, "Advanced arrival for Game");
   assert.equal(arrival.start.dateTime, "2099-05-01T15:00:00.000Z");
   assert.equal(arrival.end.dateTime, "2099-05-01T15:30:00.000Z");
   assert.equal(drive.end.dateTime, "2099-05-01T15:00:00.000Z");
@@ -3302,6 +3410,11 @@ test("existing arrival and drive placeholders preserve attendees when updated", 
     feedUrl: "https://example.com/feed.ics",
     calendarId: "calendar-1",
     addDestinationCalendarAsAttendee: false,
+    advancedArrival: {
+      pattern: "Arrival: 30 minutes in advance",
+      minutes: 30,
+      purpose: "Practice",
+    },
   };
   const evt = {
     uid: "uid-1",

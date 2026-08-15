@@ -18,7 +18,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 - Optionally creates managed drive-time placeholder events from a configured origin address to event location.
 - Drive-time placeholder descriptions include the origin, destination, and a Google Maps driving-directions link.
 - For drive placeholders, the script first tries to route from the previous non-placeholder event location on the destination calendar; if already there or within threshold, it skips creating drive time.
-- When an event description includes `Arrival: N minutes in advance`, creates a managed advanced-arrival placeholder and anchors drive-time before that arrival block.
+- When an event description matches its feed's optional `advancedArrival.pattern`, creates a managed advanced-arrival placeholder and anchors drive-time before that arrival block.
 - Deletes local synced events when an upstream event is canceled.
 - Optionally deletes only on/after-today local synced events that are no longer present in the feed (`deleteMissingFromFeed`).
 - Adds configured attendee emails to synced events and managed placeholders; each feed can optionally include or exclude its destination `calendarId` as an attendee.
@@ -35,6 +35,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
    - Set per-feed `timeZone` when a feed publishes floating times without an `X-WR-TIMEZONE` or `TZID`.
    - Optionally set `defaultAttendeeEmails` and/or per-feed `attendeeEmails`; a provided per-feed list overrides defaults, including an empty list.
    - Set per-feed `addDestinationCalendarAsAttendee: false` when the destination calendar should not also appear in the event attendee list.
+   - Optionally set per-feed `advancedArrival` with a description-matching regex, a required purpose, and optional minutes.
    - Optionally add `placeNameAddressMap` entries when event locations contain venue names instead of full addresses.
    - If using drive placeholders, set `defaultOriginAddress` and set `addDriveTimePlaceholders: true` where needed.
 6. In Apps Script editor:
@@ -101,6 +102,11 @@ function getIcalSyncConfig() {
         attendeeEmails: [],
         addDestinationCalendarAsAttendee: false,
         skipAllDayEvents: false,
+        advancedArrival: {
+          pattern: /Event Type:\s*Game/i,
+          minutes: 30,
+          purpose: "Game",
+        },
         addDriveTimePlaceholders: true,
         originAddress: "",
         placeNameAddressMap: {
@@ -124,6 +130,7 @@ To use interval scheduling instead, omit `triggerHours` and set `triggerEveryMin
 - Per-feed `titlePrefix` prepends synced event titles for that feed.
 - Per-feed `timeZone` is the fallback for floating `DTSTART`/`DTEND` values when the feed does not declare a timezone. If omitted, the Apps Script project timezone is used.
 - Per-feed `skipAllDayEvents` filters out all-day source events for that feed when set to `true`. Default: `false`.
+- Per-feed `advancedArrival` enables advanced-arrival placeholders only for source events whose descriptions match `pattern`. `pattern` is required and may be a JavaScript `RegExp` or a regex source string; `purpose` is required and produces the title `Advanced arrival for <purpose>`; `minutes` is optional and defaults to `30`.
 - `placeNameAddressMap` lets you translate venue names in locations into routable addresses before drive lookup.
 - Per-feed `attendeeEmails` overrides `defaultAttendeeEmails` when provided, including an empty list.
 - Per-feed `addDestinationCalendarAsAttendee` controls whether `calendarId` is also added to new managed events. It defaults to `true` for backward compatibility. Setting it to `false` is fix-forward: existing managed source and placeholder events retain their complete attendee lists, including during later feed-driven updates.
