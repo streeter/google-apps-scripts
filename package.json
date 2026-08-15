@@ -5,7 +5,6 @@
   "scripts": {
     "clasp:login": "clasp login",
     "clasp:open:ical": "cd ical-syncing && clasp open",
-    "clasp:pull:ical": "cd ical-syncing && clasp pull",
     "clasp:push:ical": "cd ical-syncing && clasp push",
     "clasp:pull:ical": "cd ical-syncing && clasp pull",
     "clasp:open:work": "cd work && clasp open",
