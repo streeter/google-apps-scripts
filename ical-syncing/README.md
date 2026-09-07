@@ -65,13 +65,13 @@ This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev d
 5. Push the iCal sync files:
 
    ```bash
-   npm run clasp:push:ical
+   npm run clasp:ical:push
    ```
 
 6. Open the Apps Script project when needed:
 
    ```bash
-   npm run clasp:open:ical
+   npm run clasp:ical:open
    ```
 
 `ical-syncing/.claspignore` excludes local docs, tests, the placeholder `.clasp.json`, and the example config from uploads. `appsscript.json` must be uploaded because Apps Script requires a manifest. The real `icalFeedSync.config.gs` remains gitignored, but it will be uploaded by `clasp push` when present locally.

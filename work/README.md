@@ -38,19 +38,19 @@ This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev d
 5. Push the work files:
 
    ```bash
-   npm run clasp:push:work
+   npm run clasp:work:push
    ```
 
 6. Pull remote changes back down when editing in the Apps Script UI:
 
    ```bash
-   npm run clasp:pull:work
+   npm run clasp:work:pull
    ```
 
 7. Open the Apps Script project when needed:
 
    ```bash
-   npm run clasp:open:work
+   npm run clasp:work:open
    ```
 
 `work/.claspignore` excludes local docs, tests, the placeholder `.clasp.json`, and the example configs from uploads. `appsscript.json` must be uploaded because Apps Script requires a manifest. The real `colorAttendeeConfig.gs` and `getPersonalCalendar.gs` remain gitignored, but they will be uploaded by `clasp push` when present locally.

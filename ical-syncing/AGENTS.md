@@ -18,7 +18,7 @@ This directory contains the Google Apps Script project that syncs remote iCal fe
 Use the repo-level npm script:
 
 ```bash
-npm run clasp:push:ical
+npm run clasp:ical:push
 ```
 
 That script runs:
@@ -67,7 +67,7 @@ npm test -- ical-syncing/icalFeedSync.test.js
 3. Push the project to Google:
 
 ```bash
-npm run clasp:push:ical
+npm run clasp:ical:push
 ```
 
 4. In Apps Script, manually run `syncIcalFeeds()` when needed to validate behavior and authorization.
@@ -77,7 +77,7 @@ npm run clasp:push:ical
 - Whenever a configuration field is added, renamed, removed, or its meaning changes, update the schema comments and relevant examples in both `icalFeedSync.config.example.gs` and the local `icalFeedSync.config.gs` in the same change.
 - Keep the two schema blocks aligned even though `icalFeedSync.config.gs` is gitignored.
 - Update `README.md` when the configuration change affects setup or user-visible behavior.
-- Before finishing, verify the affected field appears consistently in both configuration files. If the real config changed, run `npm run clasp:push:ical` so the deployed Apps Script receives it.
+- Before finishing, verify the affected field appears consistently in both configuration files. If the real config changed, run `npm run clasp:ical:push` so the deployed Apps Script receives it.
 
 ## Notes
 

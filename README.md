@@ -27,6 +27,17 @@ My collection of [Google's App Script](https://script.google.com/) scripts
 - [`ical-syncing/icalFeedSync.config.example.gs`](ical-syncing/icalFeedSync.config.example.gs): example config file for feed mappings and attendee lists.
 - [`ical-syncing/README.md`](ical-syncing/README.md): setup, configuration, trigger setup, and behavior details.
 
+## 🔧 Clasp Commands
+
+Authenticate once with `npm run clasp:login`. Project-specific commands follow the `clasp:<project>:<action>` naming convention:
+
+- `npm run clasp:ical:open`: open the iCal Apps Script project.
+- `npm run clasp:ical:push`: push local iCal files to Apps Script.
+- `npm run clasp:ical:pull`: pull the iCal project from Apps Script.
+- `npm run clasp:work:open`: open the work Apps Script project.
+- `npm run clasp:work:push`: push local work files to Apps Script.
+- `npm run clasp:work:pull`: pull the work project from Apps Script.
+
 ## ✅ Testing
 
 - Run tests locally with `npm test`.
