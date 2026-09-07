@@ -392,7 +392,10 @@ function syncOneFeed_(cfg, mapping, today) {
       return;
     }
     const effectiveEvt = applyPlaceNameAddressToEvent_(
-      applyEventTitlePrefix_(evt, mapping.titlePrefix),
+      applyDefaultLocationToEvent_(
+        applyEventTitlePrefix_(evt, mapping.titlePrefix),
+        mapping.defaultLocation,
+      ),
       driveOpts.placeNameAddressRules,
       mapping,
     );
@@ -1124,6 +1127,7 @@ function getIcalSyncConfig_() {
     }
     if (typeof m.titlePrefix !== "string") m.titlePrefix = "";
     if (typeof m.timeZone !== "string") m.timeZone = "";
+    if (typeof m.defaultLocation !== "string") m.defaultLocation = "";
     if (typeof m.skipAllDayEvents !== "boolean") m.skipAllDayEvents = false;
     if (Object.prototype.hasOwnProperty.call(m, "ignoreEventPattern")) {
       m.ignoreEventPattern = normalizeIgnoreEventPattern_(
@@ -1960,6 +1964,21 @@ function applyEventTitlePrefix_(evt, titlePrefix) {
   const baseTitle = (evt.summary || "(No title)").trim() || "(No title)";
   const copied = Object.assign({}, evt);
   copied.summary = prefix + " " + baseTitle;
+  return copied;
+}
+
+/**
+ * Applies a per-feed fallback location when the upstream event has none.
+ */
+function applyDefaultLocationToEvent_(evt, defaultLocation) {
+  if (!evt || typeof evt !== "object") return evt;
+  if (String(evt.location || "").trim()) return evt;
+
+  const fallback = String(defaultLocation || "").trim();
+  if (!fallback) return evt;
+
+  const copied = Object.assign({}, evt);
+  copied.location = fallback;
   return copied;
 }
 

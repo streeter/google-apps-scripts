@@ -282,6 +282,34 @@ test("getIcalSyncConfig_ defaults per-feed titlePrefix to empty string", () => {
   assert.equal(cfg.feedMappings[0].titlePrefix, "");
 });
 
+test("getIcalSyncConfig_ validates per-feed defaultLocation as a string", () => {
+  const ctx = loadIcalSyncContext();
+  ctx.getIcalSyncConfig = () => ({
+    feedMappings: [
+      {
+        name: "Feed A",
+        feedUrl: "https://example.com/a.ics",
+        calendarId: "cal1",
+        defaultLocation: "123 Main St, Brooklyn, NY",
+      },
+      {
+        name: "Feed B",
+        feedUrl: "https://example.com/b.ics",
+        calendarId: "cal2",
+        defaultLocation: 42,
+      },
+    ],
+  });
+
+  const cfg = ctx.getIcalSyncConfig_();
+
+  assert.equal(
+    cfg.feedMappings[0].defaultLocation,
+    "123 Main St, Brooklyn, NY",
+  );
+  assert.equal(cfg.feedMappings[1].defaultLocation, "");
+});
+
 test("getIcalSyncConfig_ defaults per-feed skipAllDayEvents to false", () => {
   const ctx = loadIcalSyncContext();
   ctx.getIcalSyncConfig = () => ({
@@ -1019,6 +1047,31 @@ test("applyEventTitlePrefix_ prefixes summary and preserves original event objec
 
   const unchanged = ctx.applyEventTitlePrefix_(evt, "   ");
   assert.equal(unchanged, evt);
+});
+
+test("applyDefaultLocationToEvent_ fills only missing event locations", () => {
+  const ctx = loadIcalSyncContext();
+  const missingLocation = { uid: "uid-1", summary: "Practice", location: "" };
+  const upstreamLocation = {
+    uid: "uid-2",
+    summary: "Game",
+    location: "Upstream Field",
+  };
+
+  const defaulted = ctx.applyDefaultLocationToEvent_(
+    missingLocation,
+    "  123 Main St, Brooklyn, NY  ",
+  );
+  const preserved = ctx.applyDefaultLocationToEvent_(
+    upstreamLocation,
+    "123 Main St, Brooklyn, NY",
+  );
+
+  assert.notEqual(defaulted, missingLocation);
+  assert.equal(defaulted.location, "123 Main St, Brooklyn, NY");
+  assert.equal(missingLocation.location, "");
+  assert.equal(preserved, upstreamLocation);
+  assert.equal(preserved.location, "Upstream Field");
 });
 
 test("shouldSyncEvent_ respects cutoff date", () => {
@@ -2624,6 +2677,74 @@ test("syncOneFeed_ uses a feed timezone and 30-minute fallback end for floating 
       timeZone: "America/Los_Angeles",
     }),
   );
+});
+
+test("syncOneFeed_ applies defaultLocation only to events without an upstream location", () => {
+  const ctx = loadIcalSyncContext();
+  const inserts = [];
+
+  ctx.fetchIcs_ = () =>
+    [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:missing-location",
+      "DTSTART:20990501T150000Z",
+      "DTEND:20990501T160000Z",
+      "SUMMARY:Practice",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:upstream-location",
+      "DTSTART:20990502T150000Z",
+      "DTEND:20990502T160000Z",
+      "SUMMARY:Away Game",
+      "LOCATION:Away Field",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\n");
+  ctx.loadExistingEventsByKey_ = () => ({});
+  ctx.loadExistingArrivalEventsByKey_ = () => ({});
+  ctx.loadExistingDriveEventsByKey_ = () => ({});
+  ctx.Calendar.Events.list = () => ({ items: [] });
+  ctx.Calendar.Events.insert = (resource) => {
+    inserts.push(resource);
+    return {
+      id: "created-" + inserts.length,
+      start: resource.start,
+      end: resource.end,
+      extendedProperties: resource.extendedProperties,
+    };
+  };
+  ctx.Calendar.Events.patch = () => {
+    throw new Error("unexpected patch");
+  };
+  ctx.Calendar.Events.remove = () => {
+    throw new Error("unexpected remove");
+  };
+
+  const stats = ctx.syncOneFeed_(
+    {
+      deleteMissingFromFeed: false,
+      defaultAttendeeEmails: [],
+      addDriveTimePlaceholders: false,
+    },
+    {
+      name: "Sports Feed",
+      feedUrl: "https://example.com/sports.ics",
+      calendarId: "calendar-1",
+      titlePrefix: "",
+      defaultLocation: "123 Main St, Brooklyn, NY",
+      attendeeEmails: [],
+      addDestinationCalendarAsAttendee: false,
+      addDriveTimePlaceholders: false,
+      originAddress: "",
+    },
+    new Date("2026-01-01T00:00:00Z"),
+  );
+
+  assert.equal(stats.created, 2);
+  assert.equal(inserts.length, 2);
+  assert.equal(inserts[0].location, "123 Main St, Brooklyn, NY");
+  assert.equal(inserts[1].location, "Away Field");
 });
 
 test("syncOneFeed_ treats Calendar offset timestamps as the same feed time", () => {

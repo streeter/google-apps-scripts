@@ -17,6 +17,7 @@
  *       calendarId: string,
  *       titlePrefix?: string,
  *       timeZone?: string,
+ *       defaultLocation?: string, // Used only when the upstream event has no location.
  *       attendeeEmails?: string[],
  *       addDestinationCalendarAsAttendee?: boolean,
  *       skipAllDayEvents?: boolean,
@@ -88,6 +89,10 @@ function getIcalSyncConfig() {
         // X-WR-TIMEZONE and DTSTART/DTEND contain no TZID.
         timeZone: "America/Los_Angeles",
 
+        // Optional location applied to every event in this feed that does not
+        // already have an upstream location.
+        defaultLocation: "123 Main St, Brooklyn, NY 11201",
+
         // Optional per-feed extra attendee override.
         // If omitted, defaultAttendeeEmails is used.
         // If provided as [], no extra attendees are added.
@@ -135,6 +140,7 @@ function getIcalSyncConfig() {
       //   feedUrl: "https://example.com/another.ics",
       //   calendarId: "another_calendar_id@group.calendar.google.com",
       //   titlePrefix: "[Another]",
+      //   defaultLocation: "456 Oak Ave, Brooklyn, NY 11201",
       //   skipAllDayEvents: true,
       //   ignoreEventPattern: /cancelled|do not import/i,
       //   addDestinationCalendarAsAttendee: false,
