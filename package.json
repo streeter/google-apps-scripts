@@ -7,6 +7,7 @@
     "clasp:ical:open": "cd ical-syncing && clasp open-script",
     "clasp:ical:push": "cd ical-syncing && clasp push",
     "clasp:ical:pull": "cd ical-syncing && clasp pull",
+    "clasp:ical:run": "cd ical-syncing && clasp run-function syncIcalFeeds",
     "clasp:work:open": "cd work && clasp open-script",
     "clasp:work:push": "cd work && clasp push",
     "clasp:work:pull": "cd work && clasp pull",

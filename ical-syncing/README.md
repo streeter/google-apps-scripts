@@ -51,7 +51,7 @@ This directory contains a Google Apps Script that syncs one or more remote iCal 
 
 ## Deploy with clasp
 
-This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev dependency and a placeholder `.clasp.json` for this script directory.
+This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev dependency. `ical-syncing/.clasp.json` is already bound to this Apps Script project.
 
 1. Enable the Apps Script API at `https://script.google.com/home/usersettings`.
 2. Authenticate once:
@@ -60,21 +60,41 @@ This repo includes [`@google/clasp`](https://github.com/google/clasp) as a dev d
    npm run clasp:login
    ```
 
-3. Edit `ical-syncing/.clasp.json` and replace `REPLACE_WITH_APPS_SCRIPT_PROJECT_SCRIPT_ID` with the Apps Script project script ID.
-   - In the Apps Script editor, find it under **Project Settings** → **Script ID**.
-   - Keep `rootDir` set to `"."`.
-4. Ensure `ical-syncing/icalFeedSync.config.gs` exists locally with your real feed/calendar settings.
-5. Push the iCal sync files:
+3. Ensure `ical-syncing/icalFeedSync.config.gs` exists locally with your real feed/calendar settings.
+4. Push the iCal sync files:
 
    ```bash
    npm run clasp:ical:push
    ```
 
-6. Open the Apps Script project when needed:
+5. Open the Apps Script project when needed:
 
    ```bash
    npm run clasp:ical:open
    ```
+
+## Run a function from the command line
+
+After completing the remaining Google Cloud/OAuth setup below, run the sync without opening the Apps Script editor:
+
+```bash
+npm run clasp:ical:run
+```
+
+This command changes calendars. It always targets `syncIcalFeeds` and uses clasp's default development mode, which runs the latest pushed code. Push local changes before running it. No new deployment is needed for each run.
+
+The owner-only API-executable deployment has already been created. It is a one-time entry point required by the Apps Script API even when running the latest pushed code. To finish setup:
+
+1. Associate the Apps Script project with a **standard Google Cloud project** under Apps Script **Project Settings**. Enable the Apps Script API in that same Cloud project.
+2. Add the Cloud **project ID** (not project number) as `projectId` in `ical-syncing/.clasp.json`.
+3. Create a **Desktop application** OAuth client in that Cloud project and download its client-secret JSON. Store it outside this repo; do not commit it.
+4. From `ical-syncing/`, authenticate with the project's OAuth client and manifest scopes:
+
+   ```bash
+   npx clasp login --creds /path/to/client_secret.json --use-project-scopes --include-clasp-scopes
+   ```
+
+The manifest limits API execution to the deploying user (`executionApi.access: "MYSELF"`). If the project uses additional OAuth scopes later, update the manifest and re-authenticate with the Desktop OAuth client.
 
 `ical-syncing/.claspignore` excludes local docs, tests, the placeholder `.clasp.json`, and the example config from uploads. `appsscript.json` must be uploaded because Apps Script requires a manifest. The real `icalFeedSync.config.gs` remains gitignored, but it will be uploaded by `clasp push` when present locally.
 

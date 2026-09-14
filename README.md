@@ -34,6 +34,7 @@ Authenticate once with `npm run clasp:login`. Project-specific commands follow t
 - `npm run clasp:ical:open`: open the iCal Apps Script project.
 - `npm run clasp:ical:push`: push local iCal files to Apps Script.
 - `npm run clasp:ical:pull`: pull the iCal project from Apps Script.
+- `npm run clasp:ical:run`: run `syncIcalFeeds` (one-time API executable setup required; see the iCal README).
 - `npm run clasp:work:open`: open the work Apps Script project.
 - `npm run clasp:work:push`: push local work files to Apps Script.
 - `npm run clasp:work:pull`: pull the work project from Apps Script.
