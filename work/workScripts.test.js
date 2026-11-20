@@ -409,3 +409,195 @@ function makeInterviewEvent({
     getGuestList: () => guests,
   };
 }
+
+function makeAdminDirectory(pages) {
+  const calls = [];
+  return {
+    calls,
+    AdminDirectory: {
+      Resources: {
+        Calendars: {
+          list: (customer, options) => {
+            calls.push({ customer, pageToken: options.pageToken });
+            const index = options.pageToken ? Number(options.pageToken) : 0;
+            const nextIndex = index + 1;
+            return {
+              items: pages[index],
+              nextPageToken:
+                nextIndex < pages.length ? String(nextIndex) : undefined,
+            };
+          },
+        },
+      },
+    },
+  };
+}
+
+function makeCacheService() {
+  const store = {};
+  const puts = [];
+  return {
+    store,
+    puts,
+    CacheService: {
+      getUserCache: () => ({
+        get: (key) => (key in store ? store[key] : null),
+        put: (key, value, seconds) => {
+          puts.push({ key, seconds });
+          store[key] = value;
+        },
+      }),
+    },
+  };
+}
+
+function makeRoomResource(name, buildingId, capacity) {
+  return {
+    resourceName: name,
+    resourceEmail: `room-${name.toLowerCase()}`,
+    buildingId,
+    capacity,
+  };
+}
+
+test("autoInterviewRooms listRooms filters by office and capacity, and sorts", () => {
+  const admin = makeAdminDirectory([
+    [
+      makeRoomResource("Zebra", "SSF-1", 4),
+      makeRoomResource("Big", "SSF-1", 12),
+      makeRoomResource("Virtual", "SSF-1", 0),
+      makeRoomResource("Dublin", "DUB-2", 2),
+    ],
+    [
+      makeRoomResource("Apple", "SSF-2", 4),
+      makeRoomResource("Phone", "SSF-1", 1),
+      {
+        resourceName: "NoBuilding",
+        resourceEmail: "room-nobuilding",
+        capacity: 2,
+      },
+    ],
+  ]);
+  const ctx = loadScript("work/autoInterviewRooms.gs", {
+    AdminDirectory: admin.AdminDirectory,
+  });
+
+  const rooms = ctx.listRooms("SSF");
+
+  assert.deepEqual(JSON.parse(JSON.stringify(rooms)), [
+    {
+      id: "room-phone",
+      name: "Phone",
+      capacity: 1,
+    },
+    {
+      id: "room-apple",
+      name: "Apple",
+      capacity: 4,
+    },
+    {
+      id: "room-zebra",
+      name: "Zebra",
+      capacity: 4,
+    },
+  ]);
+  assert.deepEqual(
+    admin.calls.map((call) => call.pageToken),
+    [null, "1"],
+  );
+});
+
+test("autoInterviewRooms getCachedRooms caches non-empty room lists", () => {
+  const admin = makeAdminDirectory([[makeRoomResource("Phone", "SSF-1", 1)]]);
+  const cache = makeCacheService();
+  const ctx = loadScript("work/autoInterviewRooms.gs", {
+    AdminDirectory: admin.AdminDirectory,
+    CacheService: cache.CacheService,
+  });
+
+  const first = ctx.getCachedRooms("SSF");
+  const second = ctx.getCachedRooms("SSF");
+
+  assert.equal(admin.calls.length, 1);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(second)),
+    JSON.parse(JSON.stringify(first)),
+  );
+  assert.deepEqual(cache.puts, [
+    { key: "auto-interview-rooms:SSF", seconds: 6 * 60 * 60 },
+  ]);
+});
+
+test("autoInterviewRooms getCachedRooms doesn't cache an empty room list", () => {
+  const admin = makeAdminDirectory([[makeRoomResource("Dublin", "DUB-1", 1)]]);
+  const cache = makeCacheService();
+  const ctx = loadScript("work/autoInterviewRooms.gs", {
+    AdminDirectory: admin.AdminDirectory,
+    CacheService: cache.CacheService,
+  });
+
+  assert.equal(ctx.getCachedRooms("SSF").length, 0);
+  assert.equal(ctx.getCachedRooms("SSF").length, 0);
+
+  assert.equal(admin.calls.length, 2);
+  assert.deepEqual(cache.puts, []);
+});
+
+test("autoInterviewRooms main books the first free room in OFFICE_ID", () => {
+  const admin = makeAdminDirectory([
+    [
+      makeRoomResource("Busy", "SSF-1", 1),
+      makeRoomResource("Free", "SSF-1", 2),
+      makeRoomResource("Dublin", "DUB-1", 1),
+    ],
+  ]);
+  const cache = makeCacheService();
+  const start = new Date("2026-11-21T18:00:00Z");
+  const end = new Date("2026-11-21T19:00:00Z");
+  const interview = {
+    getTitle: () => "Interview with Candidate",
+    getDescription: () => "Thanks for interviewing with us",
+    getStartTime: () => start,
+    getEndTime: () => end,
+  };
+  const freebusyQueries = [];
+  const inserted = [];
+  const ctx = loadScript("work/autoInterviewRooms.gs", {
+    AdminDirectory: admin.AdminDirectory,
+    CacheService: cache.CacheService,
+    CalendarApp: {
+      getDefaultCalendar: () => ({
+        getEvents: () => [interview],
+      }),
+    },
+    Calendar: {
+      Freebusy: {
+        query: (request) => {
+          const id = request.items[0].id;
+          freebusyQueries.push(id);
+          const busy = id === "room-busy" ? [{ start: "x" }] : [];
+          return { calendars: { [id]: { busy } } };
+        },
+      },
+      Events: {
+        insert: (event, calendarId) => {
+          inserted.push({ event, calendarId });
+          return event;
+        },
+      },
+    },
+  });
+
+  const summary = ctx.main();
+
+  assert.deepEqual(freebusyQueries, ["room-busy", "room-free"]);
+  assert.equal(inserted.length, 1);
+  assert.equal(inserted[0].calendarId, "primary");
+  assert.deepEqual(JSON.parse(JSON.stringify(inserted[0].event.attendees)), [
+    { email: "room-free", resource: true },
+  ]);
+  assert.equal(inserted[0].event.start.dateTime, "2026-11-21T17:45:00.000Z");
+  assert.equal(inserted[0].event.end.dateTime, "2026-11-21T19:15:00.000Z");
+  assert.match(summary, /Created: 1/);
+  assert.match(summary, /No room: 0/);
+});
